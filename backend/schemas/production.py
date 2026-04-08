@@ -1,0 +1,109 @@
+from datetime import datetime
+from typing import Optional
+from pydantic import BaseModel, computed_field
+
+
+class CentroCostosOut(BaseModel):
+    Id: int
+    centro: str
+    tipo_inv: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class MaquinaOut(BaseModel):
+    Id: int
+    nombre: str
+    capacidad_hora: int
+    centro_costos_id: int
+    estado: int
+    estado_descripcion: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class OpNumeroOut(BaseModel):
+    Id: int
+    docto: int
+    item: str
+    marca: Optional[str] = None
+    cantidad: Optional[int] = None
+    cant_consumida: Optional[int] = None
+    lote: Optional[str] = None
+    und_medida: Optional[str] = None
+    ext1: Optional[str] = None
+    ext2: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    @computed_field
+    @property
+    def estado(self) -> str:
+        cant = self.cantidad or 0
+        consumida = self.cant_consumida or 0
+        if consumida <= 0:
+            return "Pendiente"
+        if consumida >= cant:
+            return "Completado"
+        return "En proceso"
+
+    @computed_field
+    @property
+    def pct_completado(self) -> float:
+        cant = self.cantidad or 0
+        if cant == 0:
+            return 0.0
+        return round(min((self.cant_consumida or 0) / cant * 100, 100), 1)
+
+    model_config = {"from_attributes": True}
+
+
+class KPIProduccionOut(BaseModel):
+    total_ordenes: int
+    completadas: int
+    en_proceso: int
+    pendientes: int
+    sin_asignar: int
+    pct_completado: float
+
+
+class PersonalPlantaOut(BaseModel):
+    Id: int
+    nombre_operario: str
+    cargo: Optional[int] = None
+    cargo_nombre: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class RegistroProduccionCreate(BaseModel):
+    fecha: datetime
+    maquina: int
+    numero_op: int
+    operario: int
+    produccion: int
+    clase_b: int = 0
+    desecho: int = 0
+    lider_turno: int
+    lote: Optional[str] = None
+    kg_lote: Optional[int] = None
+
+
+class RegistroProduccionOut(BaseModel):
+    Id: int
+    fecha: datetime
+    maquina: int
+    maquina_nombre: Optional[str] = None
+    numero_op: int
+    item: Optional[str] = None
+    operario: int
+    operario_nombre: Optional[str] = None
+    produccion: int
+    clase_b: Optional[int] = None
+    desecho: Optional[int] = None
+    lider_turno: int
+    lider_nombre: Optional[str] = None
+    lote: Optional[str] = None
+    kg_lote: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
