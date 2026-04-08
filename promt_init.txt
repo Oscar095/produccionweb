@@ -1,0 +1,209 @@
+# 🏭 Sistema de Planeación de Producción — KOS Xpress
+
+## ROL
+Eres un arquitecto de software senior especializado en sistemas MES (Manufacturing 
+Execution Systems) y planeación de producción. Tienes experiencia en Python (FastAPI), 
+React, SQL Server y visualizaciones de tipo Gantt. Tu trabajo es construir una plataforma 
+completa que reemplace y supere lo que actualmente se hace en AppSheet.
+
+---
+
+## CONTEXTO DEL NEGOCIO
+
+Tengo una planta de producción industrial con las siguientes características:
+
+- **Centros de trabajo**: múltiples máquinas/estaciones donde se ejecutan órdenes
+- **Órdenes de producción**: documentos que asignan trabajo a centros de trabajo con 
+  cantidad, tiempo estimado y fechas
+- **Sistema de mantenimiento**: tickets de mantenimiento correctivo/preventivo y paradas 
+  de máquina que afectan la capacidad disponible
+- **Base de datos**: SQL Server (Azure SQL Server en Azure App Service)
+- **Sistema actual**: AppSheet (solo registro de datos, sin análisis ni planeación)
+
+---
+
+## PASO 1 — CONEXIÓN Y ANÁLISIS DE BASE DE DATOS (OBLIGATORIO ANTES DE CUALQUIER CÓDIGO)
+
+**Conéctate a la base de datos SQL Server con las credenciales que te voy a proporcionar 
+y ejecuta los siguientes pasos de exploración:**
+
+### 1.1 Descubrir el esquema completo
+```sql
+-- Listar todas las tablas del esquema
+SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_TYPE = 'BASE TABLE'
+ORDER BY TABLE_SCHEMA, TABLE_NAME;
+```
+
+### 1.2 Para cada tabla relevante, obtener columnas
+```sql
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME IN (<tablas encontradas>)
+ORDER BY TABLE_NAME, ORDINAL_POSITION;
+```
+
+### 1.3 Relaciones y claves foráneas
+```sql
+SELECT 
+    FK.TABLE_NAME AS FK_Table,
+    CU.COLUMN_NAME AS FK_Column,
+    PK.TABLE_NAME AS PK_Table,
+    PT.COLUMN_NAME AS PK_Column
+FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS RC
+JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS FK ON FK.CONSTRAINT_NAME = RC.CONSTRAINT_NAME
+JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS PK ON PK.CONSTRAINT_NAME = RC.UNIQUE_CONSTRAINT_NAME
+JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE CU ON CU.CONSTRAINT_NAME = FK.CONSTRAINT_NAME
+JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE PT ON PT.CONSTRAINT_NAME = PK.CONSTRAINT_NAME;
+```
+
+### 1.4 Muestra de datos (top 5 por tabla)
+```sql
+SELECT TOP 5 * FROM <cada_tabla_relevante>;
+```
+
+**⚠️ IMPORTANTE**: No escribas UNA SOLA LÍNEA de código de la aplicación hasta haber 
+completado este análisis. Preséntame un resumen del esquema encontrado y confirma 
+conmigo las entidades antes de continuar.
+
+---
+
+## PASO 2 — ARQUITECTURA DE LA SOLUCIÓN
+
+Una vez entendido el esquema, construye esta arquitectura:
+
+### Backend — FastAPI + Python
+
+/api
+/production     → CRUD órdenes de producción
+/centers        → centros de trabajo y capacidad
+/maintenance    → tickets y paradas de máquina
+/planning       → motor de planeación y priorización
+/reports        → resúmenes semanales para supervisores
+/gantt          → datos para el diagrama de Gantt
+
+### Frontend — React + Tailwind CSS
+/dashboard        → KPIs de producción en tiempo real
+/orders           → listado y gestión de órdenes
+/gantt            → diagrama de Gantt interactivo de capacidad
+/planning         → módulo de planeación con drag & drop de prioridades
+/maintenance      → gestión de tickets de mantenimiento
+/reports          → generador de resúmenes semanales
+
+### Base de datos
+- Usa el SQL Server existente
+- Crea las tablas/vistas faltantes que necesite la plataforma (con scripts de migración)
+
+---
+
+## PASO 3 — MÓDULOS A DESARROLLAR (en este orden de prioridad)
+
+### 🔴 MÓDULO 1: Dashboard de Producción
+- KPIs: órdenes completadas, en proceso, pendientes, vencidas
+- Eficiencia por centro de trabajo (actual vs capacidad)
+- Alertas de paradas de máquina activas
+- Gráficas de tendencia semanal/mensual
+
+### 🔴 MÓDULO 2: Diagrama de Gantt de Capacidad
+- Vista por centro de trabajo vs tiempo (días/semanas)
+- Barras coloreadas por estado: En proceso / Pendiente / Parado / Completado
+- Indicador visual de sobrecarga de capacidad (zona roja)
+- Afectación de paradas de mantenimiento sobre la capacidad disponible
+- Interactivo: hover para ver detalle de orden, click para editar
+- Filtros: por centro de trabajo, rango de fechas, estado
+
+### MÓDULO 3: Planeación y Priorización
+- Vista tipo tablero por centro de trabajo
+- Drag & drop para reordenar prioridad de órdenes
+- Acciones por orden:
+  - Marcar como cumplida
+  - Suspender (con motivo)
+  - Subir/bajar prioridad
+  - Ver detalle completo
+- Motor de cálculo: dado el tiempo estándar por orden y la capacidad disponible 
+  del centro (descontando mantenimientos), calcular automáticamente qué órdenes 
+  son alcanzables en la semana
+
+### MÓDULO 4: Gestión de Mantenimiento
+- Registro de tickets de mantenimiento
+- Asociar parada a centro de trabajo + rango de fechas/horas
+- Impacto automático sobre la disponibilidad en el Gantt
+- Estados: Abierto / En progreso / Cerrado
+
+### MÓDULO 5: Resumen Semanal para Supervisores
+- Generación automática (puede ser manual o programada)
+- Contenido del resumen:
+  - Órdenes que DEBEN completarse esta semana (por prioridad)
+  - Órdenes en riesgo (capacidad insuficiente)
+  - Paradas de mantenimiento programadas
+  - % cumplimiento de la semana anterior
+- Formato exportable a PDF
+- Opción de enviar por email (preparar endpoint, integración de correo opcional)
+
+---
+
+## PASO 4 — ESPECIFICACIONES TÉCNICAS
+
+### Stack obligatorio
+- **Backend**: Python 3.11+, FastAPI, SQLAlchemy (con pyodbc para SQL Server), Pydantic v2
+- **Frontend**: React 18, Tailwind CSS, shadcn/ui para componentes
+- **Gantt**: usar librería `@dhx/trial-gantt` o `react-gantt-chart` o implementación 
+  custom con SVG/Canvas si las librerías tienen limitaciones
+- **Estado**: Zustand o React Query para manejo de estado del frontend
+- **Autenticación**: JWT básico (usuario/contraseña) — no OAuth por ahora
+
+### Estructura de carpetas
+/
+├── backend/
+│   ├── main.py
+│   ├── database.py          # conexión SQL Server
+│   ├── models/              # modelos SQLAlchemy
+│   ├── schemas/             # schemas Pydantic
+│   ├── routers/             # endpoints por módulo
+│   ├── services/            # lógica de negocio
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── pages/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   └── api/             # cliente axios por módulo
+│   └── package.json
+└── docker-compose.yml       # para levantar todo junto
+---
+
+## RESTRICCIONES Y CONSIDERACIONES
+
+1. **No romper los datos existentes**: todo acceso a tablas existentes debe ser 
+   de solo lectura o con ALTER TABLE no destructivo. Las tablas nuevas van en 
+   esquema separado `planeacion.*`
+2. **AppSheet sigue funcionando**: la plataforma nueva convive con AppSheet 
+   durante la transición — misma base de datos, sin conflictos
+3. **Performance**: las consultas al Gantt pueden involucrar cientos de órdenes; 
+   usa índices y paginación donde corresponda
+4. **Responsive**: la interfaz debe funcionar en tablet (supervisores en planta)
+
+---
+
+## ENTREGABLES ESPERADOS
+
+Al finalizar quiero:
+1. Backend corriendo con todos los endpoints documentados (Swagger en /docs)
+2. Frontend funcional con los 5 módulos
+3. Scripts SQL de las tablas/vistas nuevas
+4. docker-compose.yml para levantar el proyecto completo
+5. README.md con instrucciones de instalación y configuración
+
+---
+
+## FLUJO DE TRABAJO PARA CLAUDE CODE
+
+1. **Primero**: conecta a la BD y analiza el esquema → preséntame el resumen
+2. **Segundo**: propón el modelo de datos completo (tablas nuevas + mapeo a existentes)
+3. **Tercero**: construye el backend módulo por módulo, empezando por producción y Gantt
+4. **Cuarto**: construye el frontend comenzando por Dashboard y Gantt
+5. **Quinto**: implementa el módulo de planeación (el más crítico del negocio)
+6. **Sexto**: resúmenes semanales y exportación PDF
+
+La conexion de SQl la encuentras en el .env
