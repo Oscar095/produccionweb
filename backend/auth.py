@@ -1,6 +1,6 @@
 """
 Autenticación JWT para KOS Xpress.
-Roles: admin, supervisor, operador
+Roles dinámicos almacenados en planeacion.roles.
 Token expira en 8 horas (duración de un turno de trabajo).
 Usa bcrypt directamente (compatible Python 3.11–3.14+).
 """

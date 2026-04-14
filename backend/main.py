@@ -8,9 +8,9 @@ from database import engine, Base
 from models import *   # registra todos los modelos con Base
 
 # Importar modelos de planeacion para crear tablas si no existen
-from models.planning import Usuario, Asignacion, ParadaProgramada, ResumenSemanal
+from models.planning import Usuario, Asignacion, ParadaProgramada, ResumenSemanal, Rol, RolPermiso
 
-from routers import auth, gantt, production, maintenance, planning, reports
+from routers import auth, gantt, production, maintenance, planning, reports, roles
 
 app = FastAPI(
     title="KOS Xpress — Planeación de Producción",
@@ -36,6 +36,7 @@ app.include_router(production.router)
 app.include_router(maintenance.router)
 app.include_router(planning.router)
 app.include_router(reports.router)
+app.include_router(roles.router)
 
 
 @app.on_event("startup")

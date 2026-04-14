@@ -15,7 +15,7 @@ function KPICard({ label, value, sub, color, Icon }: {
       </div>
       <div>
         <p className="text-sm text-gray-500">{label}</p>
-        <p className="text-3xl font-bold text-gray-800">{value}</p>
+        <p className="text-2xl sm:text-3xl font-bold text-gray-800">{value}</p>
         {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
       </div>
     </div>
@@ -28,14 +28,14 @@ export default function Dashboard() {
   const { data: capacidades } = useQuery({ queryKey: ['capacidad'], queryFn: () => getCapacidad(), refetchInterval: 300_000 })
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-gray-800">Dashboard de Producción</h2>
         <p className="text-sm text-gray-500 mt-1">Vista en tiempo real — actualiza cada 5 min</p>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <KPICard
           label="Completadas" value={kpis?.completadas ?? '—'}
           sub={kpis ? `${kpis.pct_completado}% del total` : undefined}

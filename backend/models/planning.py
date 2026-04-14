@@ -8,6 +8,35 @@ from sqlalchemy.orm import relationship
 from database import Base
 
 
+class Rol(Base):
+    __tablename__ = "roles"
+    __table_args__ = {"schema": "planeacion"}
+
+    id          = Column(Integer, primary_key=True)
+    nombre      = Column(String(100), nullable=False, unique=True)
+    descripcion = Column(String(255))
+    activo      = Column(Boolean, default=True)
+    created_at  = Column(DateTime)
+
+    permisos = relationship("RolPermiso", back_populates="rol", cascade="all, delete-orphan")
+    usuarios = relationship("Usuario", back_populates="rol_obj")
+
+
+class RolPermiso(Base):
+    __tablename__ = "rol_permisos"
+    __table_args__ = {"schema": "planeacion"}
+
+    id             = Column(Integer, primary_key=True)
+    rol_id         = Column(Integer, ForeignKey("planeacion.roles.id"), nullable=False)
+    modulo         = Column(String(50), nullable=False)
+    puede_ver      = Column(Boolean, default=False)
+    puede_crear    = Column(Boolean, default=False)
+    puede_editar   = Column(Boolean, default=False)
+    puede_eliminar = Column(Boolean, default=False)
+
+    rol = relationship("Rol", back_populates="permisos")
+
+
 class Usuario(Base):
     """Usuarios del sistema KOS Xpress (independiente de AppSheet)."""
     __tablename__ = "usuarios"
@@ -17,10 +46,12 @@ class Usuario(Base):
     username      = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(256), nullable=False)
     nombre        = Column(String(100), nullable=False)
-    rol           = Column(String(20), nullable=False, default="operador")
-    # roles: admin | supervisor | operador
+    rol           = Column(String(100), nullable=False, default="operador")
     activo        = Column(Boolean, nullable=False, default=True)
     created_at    = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    rol_id        = Column(Integer, ForeignKey("planeacion.roles.id"), nullable=True)
+
+    rol_obj = relationship("Rol", back_populates="usuarios")
 
 
 class Asignacion(Base):

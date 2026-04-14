@@ -75,8 +75,8 @@ function TicketModal({ ticketId, onClose }: { ticketId: number; onClose: () => v
     enabled: repSearch.length >= 2,
   })
   const { data: operariosModal = [] } = useQuery<Operario[]>({
-    queryKey: ['operarios'],
-    queryFn: () => getOperarios(),
+    queryKey: ['mecanicos'],
+    queryFn: () => getOperarios({ mecanicos_only: true }),
   })
 
   const mutBitacora = useMutation({
@@ -97,6 +97,47 @@ function TicketModal({ ticketId, onClose }: { ticketId: number; onClose: () => v
       setUpdatingEstado(false)
     },
   })
+
+  const hasEnPruebas = bitacoras.some(b => b.Tipo === 'En Pruebas')
+  const hasResult    = bitacoras.some(b => b.Tipo === 'Pruebas Aprobadas' || b.Tipo === 'Pruebas Rechazadas')
+
+  const QUICK_ACTIONS = [
+    {
+      tipo: 'En Pruebas',
+      label: 'En Pruebas',
+      desc: 'Máquina en pruebas de funcionamiento',
+      enabled: !hasEnPruebas && !hasResult,
+      color: 'bg-yellow-50 border-yellow-300 text-yellow-800 hover:bg-yellow-100 disabled:opacity-40',
+    },
+    {
+      tipo: 'Pruebas Aprobadas',
+      label: 'Pruebas Aprobadas',
+      desc: 'Pruebas aprobadas. Máquina lista para producción',
+      enabled: hasEnPruebas && !hasResult,
+      color: 'bg-green-50 border-green-300 text-green-800 hover:bg-green-100 disabled:opacity-40',
+    },
+    {
+      tipo: 'Pruebas Rechazadas',
+      label: 'Pruebas Rechazadas',
+      desc: 'Pruebas rechazadas. Máquina requiere intervención adicional',
+      enabled: hasEnPruebas && !hasResult,
+      color: 'bg-red-50 border-red-300 text-red-800 hover:bg-red-100 disabled:opacity-40',
+    },
+  ]
+
+  const handleQuickAction = (tipo: string, desc: string) => {
+    setEntryForm(f => ({
+      ...f,
+      Tipo: tipo,
+      bitacora: desc,
+      fecha: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
+      row_mecanico: '',
+      observaciones: '',
+      id_repuesto: '',
+      cantidad: '',
+    }))
+    setAddingEntry(true)
+  }
 
   const setEF = (k: string, v: string) => setEntryForm(f => ({ ...f, [k]: v }))
 
@@ -130,7 +171,7 @@ function TicketModal({ ticketId, onClose }: { ticketId: number; onClose: () => v
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-end z-50">
-      <div className="bg-white h-full w-full max-w-xl flex flex-col shadow-2xl">
+      <div className="bg-white h-full w-full max-w-full md:max-w-xl flex flex-col shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b">
           <div>
@@ -214,6 +255,20 @@ function TicketModal({ ticketId, onClose }: { ticketId: number; onClose: () => v
               </button>
             </div>
 
+            {/* Botones de flujo de pruebas */}
+            <div className="flex gap-2 flex-wrap">
+              {QUICK_ACTIONS.map(action => (
+                <button
+                  key={action.tipo}
+                  disabled={!action.enabled}
+                  onClick={() => handleQuickAction(action.tipo, action.desc)}
+                  className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition ${action.color}`}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+
             {/* Formulario nueva entrada */}
             {addingEntry && (
               <div className="border rounded-xl p-4 space-y-3 bg-blue-50">
@@ -226,6 +281,8 @@ function TicketModal({ ticketId, onClose }: { ticketId: number; onClose: () => v
                     <select className={SELECT} value={entryForm.Tipo} onChange={e => setEF('Tipo', e.target.value)}>
                       <option value="">Actividad</option>
                       <option value="En Pruebas">En Pruebas</option>
+                      <option value="Pruebas Aprobadas">Pruebas Aprobadas</option>
+                      <option value="Pruebas Rechazadas">Pruebas Rechazadas</option>
                       <option value="Repuesto Usado">Repuesto Usado</option>
                     </select>
                   </Field>
@@ -327,7 +384,6 @@ function NuevoTicketModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient()
   const [form, setForm] = useState({
     fecha: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
-    ticket: '',
     row_maquina: '',
     row_operario: '',
     row_motivo: '',
@@ -344,6 +400,10 @@ function NuevoTicketModal({ onClose }: { onClose: () => void }) {
     queryKey: ['operarios'],
     queryFn: () => getOperarios(),
   })
+  const { data: mecanicos = [] } = useQuery<Operario[]>({
+    queryKey: ['mecanicos'],
+    queryFn: () => getOperarios({ mecanicos_only: true }),
+  })
   const { data: catalogos } = useQuery({
     queryKey: ['catalogos'],
     queryFn: getCatalogos,
@@ -358,12 +418,11 @@ function NuevoTicketModal({ onClose }: { onClose: () => void }) {
   })
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
-  const canSubmit = form.ticket && form.row_maquina && form.row_operario && form.row_motivo && form.row_asunto
+  const canSubmit = form.row_maquina && form.row_operario && form.row_motivo && form.row_asunto
 
   const handleSubmit = () => {
     mutCreate.mutate({
       fecha: form.fecha,
-      ticket: form.ticket,
       row_maquina: Number(form.row_maquina),
       row_operario: Number(form.row_operario),
       row_motivo: Number(form.row_motivo),
@@ -382,16 +441,10 @@ function NuevoTicketModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Fecha y hora">
-              <input type="datetime-local" className={INPUT} value={form.fecha}
-                onChange={e => set('fecha', e.target.value)} />
-            </Field>
-            <Field label="# Ticket *">
-              <input className={INPUT} placeholder="Ej: TK-001" value={form.ticket}
-                onChange={e => set('ticket', e.target.value)} />
-            </Field>
-          </div>
+          <Field label="Fecha y hora">
+            <input type="datetime-local" className={INPUT} value={form.fecha}
+              onChange={e => set('fecha', e.target.value)} />
+          </Field>
 
           <Field label="Máquina *">
             <select className={SELECT} value={form.row_maquina} onChange={e => set('row_maquina', e.target.value)}>
@@ -429,7 +482,7 @@ function NuevoTicketModal({ onClose }: { onClose: () => void }) {
             <Field label="Mecánico asignado">
               <select className={SELECT} value={form.row_mecanico} onChange={e => set('row_mecanico', e.target.value)}>
                 <option value="">Sin asignar</option>
-                {operarios.map(o => <option key={o.Id} value={o.Id}>{o.nombre_operario}</option>)}
+                {mecanicos.map(o => <option key={o.Id} value={o.Id}>{o.nombre_operario}</option>)}
               </select>
             </Field>
           </div>
@@ -452,7 +505,7 @@ function NuevoTicketModal({ onClose }: { onClose: () => void }) {
 
 // ─── Página Principal ─────────────────────────────────────────────────────────
 export default function Maintenance() {
-  const [estado, setEstado] = useState<string>('')
+  const [estado, setEstado] = useState<string>('1')
   const [page, setPage] = useState(1)
   const [selectedTicketId, setSelectedTicketId] = useState<number | null>(null)
   const [showNuevo, setShowNuevo] = useState(false)
@@ -466,11 +519,11 @@ export default function Maintenance() {
   const total: number = data?.total ?? 0
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h2 className="text-2xl font-bold text-gray-800">Mantenimiento</h2>
         <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             {[{ v: '', l: 'Todos' }, { v: '1', l: 'Activos' }, { v: '2', l: 'Solucionados' }, { v: '3', l: 'Cancelados' }].map(opt => (
               <button key={opt.v}
                 onClick={() => { setEstado(opt.v); setPage(1) }}

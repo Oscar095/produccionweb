@@ -39,7 +39,7 @@ class SolicitudMantenimientoOut(BaseModel):
 
 class SolicitudMantenimientoCreate(BaseModel):
     fecha: datetime
-    ticket: str
+    ticket: Optional[str] = None
     row_maquina: int
     row_operario: int
     row_motivo: int

@@ -121,6 +121,7 @@ def list_centers(db: Session = Depends(get_db), _=Depends(get_current_user)):
 @router.get("/operarios", response_model=List[PersonalPlantaOut])
 def list_operarios(
     cargo: Optional[int] = Query(default=None, description="Filtrar por id de cargo"),
+    mecanicos_only: bool = Query(default=False, description="Solo operarios con cargo Mecanico"),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -131,6 +132,8 @@ def list_operarios(
     q = db.query(PersonalPlanta).filter(PersonalPlanta.estado == True)
     if cargo:
         q = q.filter(PersonalPlanta.cargo == cargo)
+    if mecanicos_only:
+        q = q.filter(PersonalPlanta.cargo == 3)  # Id 3 = Mecanico en dbo.cargos_planta
     personal = q.order_by(PersonalPlanta.Id).all()
 
     # Obtener nombres de cargos en un solo query

@@ -243,7 +243,7 @@ export default function Orders() {
   }
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h2 className="text-2xl font-bold text-gray-800">Órdenes de Producción</h2>
         <button
@@ -278,7 +278,7 @@ export default function Orders() {
               <input
                 value={buscar} onChange={e => setBuscar(e.target.value)}
                 placeholder="Buscar por item, marca o OP..."
-                className="border rounded-lg px-3 py-2 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="border rounded-lg px-3 py-2 text-sm w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-400"
               />
               <button type="submit" className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
                 <Search size={16} />
@@ -297,13 +297,18 @@ export default function Orders() {
 
           {isLoading && <p className="text-gray-400 text-sm">Cargando...</p>}
 
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden border">
+          <div className="overflow-x-auto rounded-xl shadow-sm border bg-white">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  {['OP', 'Producto', 'Marca', 'Lote', 'Cantidad', 'Consumida', 'Estado', 'Creado'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-                  ))}
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">OP</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Producto</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide hidden md:table-cell">Marca</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide hidden md:table-cell">Lote</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Cantidad</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide hidden lg:table-cell">Consumida</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Estado</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide hidden lg:table-cell">Creado</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -311,10 +316,10 @@ export default function Orders() {
                   <tr key={o.Id} className="hover:bg-gray-50 transition">
                     <td className="px-4 py-3 font-bold text-gray-700">{o.docto}</td>
                     <td className="px-4 py-3 max-w-[200px] truncate text-gray-800">{o.item}</td>
-                    <td className="px-4 py-3 text-gray-500">{o.marca || '—'}</td>
-                    <td className="px-4 py-3 text-gray-500 font-mono text-xs">{o.lote || '—'}</td>
+                    <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{o.marca || '—'}</td>
+                    <td className="px-4 py-3 text-gray-500 font-mono text-xs hidden md:table-cell">{o.lote || '—'}</td>
                     <td className="px-4 py-3 text-gray-700">{o.cantidad?.toLocaleString()} {o.und_medida}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 hidden lg:table-cell">
                       <div className="flex items-center gap-2">
                         <span className="text-gray-700">{(o.cant_consumida || 0).toLocaleString()}</span>
                         {o.pct_completado > 0 && (
@@ -329,7 +334,7 @@ export default function Orders() {
                         {o.estado}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">
+                    <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">
                       {o.created_at ? format(new Date(o.created_at), 'dd/MM/yy') : '—'}
                     </td>
                   </tr>
@@ -358,7 +363,7 @@ export default function Orders() {
           <p className="text-sm text-gray-500">{regTotal} registros hoy ({format(new Date(), 'dd/MM/yyyy')})</p>
           {regLoading && <p className="text-gray-400 text-sm">Cargando...</p>}
 
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden border">
+          <div className="overflow-x-auto rounded-xl shadow-sm border bg-white">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b">
                 <tr>

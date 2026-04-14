@@ -85,8 +85,13 @@ def create_ticket(
     db: Session = Depends(get_db),
     _=Depends(require_roles("admin", "supervisor")),
 ):
-    t = SolicitudMantenimiento(**body.model_dump(), created_at=datetime.now())
+    data = body.model_dump()
+    data.pop("ticket", None)
+    t = SolicitudMantenimiento(**data, created_at=datetime.now())
     db.add(t)
+    db.commit()
+    db.refresh(t)
+    t.ticket = f"tk{t.Id}"
     db.commit()
     db.refresh(t)
     return _to_out(t, db)
