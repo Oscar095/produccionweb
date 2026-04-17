@@ -1,13 +1,13 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { format } from 'date-fns'
+import { format, subMonths } from 'date-fns'
 import { getOrders, getRegistros, createRegistro, getCenters, getOperarios } from '../api/production'
-import { Search, Plus, X } from 'lucide-react'
+import { Search, Plus, X, ChevronDown, Check } from 'lucide-react'
 
 type Orden = {
   Id: number; docto: number; item: string; marca?: string; lote?: string
   cantidad?: number; cant_consumida?: number; estado: string; pct_completado: number
-  und_medida?: string; created_at?: string
+  und_medida?: string; created_at?: string; ext1?: string; ext2?: string
 }
 type Registro = {
   Id: number; fecha: string; maquina: number; maquina_nombre?: string
@@ -25,13 +25,110 @@ const ESTADO_COLOR: Record<string, string> = {
 }
 
 const INPUT = 'w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400'
-const SELECT = `${INPUT} bg-white`
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</label>
+      <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+        {label}
+        {required && <span className="text-red-500 ml-1">*</span>}
+      </label>
       {children}
+    </div>
+  )
+}
+
+type Option = { value: string | number; label: string; sub?: string; searchText?: string }
+
+function SearchableSelect({
+  value, onChange, options, placeholder = 'Seleccionar...', emptyText = 'Sin coincidencias', disabled,
+}: {
+  value: string
+  onChange: (v: string) => void
+  options: Option[]
+  placeholder?: string
+  emptyText?: string
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  useEffect(() => { if (!open) setSearch('') }, [open])
+
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? options.filter(o => {
+        const hay = (o.searchText ?? `${o.label} ${o.sub ?? ''}`).toLowerCase()
+        return hay.includes(q)
+      })
+    : options
+
+  const selected = options.find(o => String(o.value) === value)
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(o => !o)}
+        className={`${INPUT} bg-white flex items-center justify-between text-left disabled:opacity-50 disabled:cursor-not-allowed`}
+      >
+        <span className={`truncate ${selected ? 'text-gray-800' : 'text-gray-400'}`}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
+      </button>
+
+      {open && (
+        <div className="absolute z-30 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-72 flex flex-col overflow-hidden">
+          <div className="p-2 border-b bg-gray-50">
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Buscar..."
+                className="w-full border rounded pl-8 pr-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+            </div>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {filtered.length === 0 ? (
+              <div className="p-3 text-xs text-gray-400 text-center">{emptyText}</div>
+            ) : filtered.map(o => {
+              const isSel = String(o.value) === value
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => { onChange(String(o.value)); setOpen(false) }}
+                  className={`w-full text-left px-3 py-2 text-sm flex items-start gap-2 hover:bg-blue-50 transition ${isSel ? 'bg-blue-50' : ''}`}
+                >
+                  <Check size={14} className={`mt-0.5 flex-shrink-0 ${isSel ? 'text-blue-600' : 'text-transparent'}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className={`truncate ${isSel ? 'font-semibold text-blue-700' : 'text-gray-700'}`}>{o.label}</div>
+                    {o.sub && <div className="text-xs text-gray-500 truncate">{o.sub}</div>}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+          <div className="px-3 py-1.5 border-t bg-gray-50 text-xs text-gray-500">
+            {filtered.length} de {options.length}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -51,13 +148,11 @@ function RegistroModal({ onClose }: { onClose: () => void }) {
     lote: '',
     kg_lote: '',
   })
-  const [opSearch, setOpSearch] = useState('')
-  const [opSearchCommit, setOpSearchCommit] = useState('')
-
-  const { data: ordersData } = useQuery({
-    queryKey: ['orders-modal', opSearchCommit],
-    queryFn: () => getOrders({ buscar: opSearchCommit || undefined, page: 1, page_size: 20 }),
-    enabled: true,
+  // Cargamos TODAS las OPs de una vez (hasta 2000) para filtrar localmente.
+  // Así el buscador encuentra coincidencias en cualquier columna sin depender del backend.
+  const { data: ordersData, isLoading: opsLoading } = useQuery({
+    queryKey: ['orders-modal-all'],
+    queryFn: () => getOrders({ page: 1, page_size: 2000 }),
   })
   const orders: Orden[] = ordersData?.items ?? []
 
@@ -69,6 +164,24 @@ function RegistroModal({ onClose }: { onClose: () => void }) {
     queryKey: ['operarios'],
     queryFn: () => getOperarios(),
   })
+
+  const opOptions: Option[] = orders.map(o => {
+    const extras = [o.marca, o.ext1, o.lote ? `Lote ${o.lote}` : null].filter(Boolean).join(' · ')
+    return {
+      value: o.docto,
+      label: `OP ${o.docto} — ${o.item}`,
+      sub: extras || undefined,
+      searchText: [o.docto, o.item, o.marca, o.ext1, o.ext2, o.lote, o.und_medida].filter(Boolean).join(' '),
+    }
+  })
+
+  const maquinaOptions: Option[] = maquinas.map(m => ({ value: m.Id, label: m.nombre }))
+  const operarioOptions: Option[] = operarios.map(o => ({
+    value: o.Id,
+    label: o.nombre_operario,
+    sub: o.cargo_nombre,
+    searchText: `${o.nombre_operario} ${o.cargo_nombre ?? ''} ${o.Id}`,
+  }))
 
   const mutCreate = useMutation({
     mutationFn: createRegistro,
@@ -108,75 +221,60 @@ function RegistroModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="p-6 space-y-4">
-          <Field label="Fecha y hora">
+          <Field label="Fecha y hora" required>
             <input type="datetime-local" className={INPUT} value={form.fecha}
               onChange={e => set('fecha', e.target.value)} />
           </Field>
 
-          <Field label="Orden de Producción (OP)">
-            <div className="space-y-1.5">
-              <div className="flex gap-2">
-                <input
-                  className={INPUT}
-                  placeholder="Buscar por item, marca o número..."
-                  value={opSearch}
-                  onChange={e => setOpSearch(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') setOpSearchCommit(opSearch) }}
-                />
-                <button onClick={() => setOpSearchCommit(opSearch)}
-                  className="px-3 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">
-                  <Search size={16} />
-                </button>
-              </div>
-              <select className={SELECT} value={form.numero_op} onChange={e => set('numero_op', e.target.value)}>
-                <option value="">Seleccionar OP...</option>
-                {orders.map(o => (
-                  <option key={o.docto} value={o.docto}>
-                    OP {o.docto} — {o.item}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <Field label="Orden de Producción (OP)" required>
+            <SearchableSelect
+              value={form.numero_op}
+              onChange={v => set('numero_op', v)}
+              options={opOptions}
+              placeholder={opsLoading ? 'Cargando órdenes...' : `Seleccionar OP (${opOptions.length} disponibles)...`}
+              emptyText="Sin coincidencias. Prueba con item, marca, referencia, OP o lote."
+              disabled={opsLoading}
+            />
           </Field>
 
-          <Field label="Máquina">
-            <select className={SELECT} value={form.maquina} onChange={e => set('maquina', e.target.value)}>
-              <option value="">Seleccionar máquina...</option>
-              {maquinas.map(m => (
-                <option key={m.Id} value={m.Id}>{m.nombre}</option>
-              ))}
-            </select>
+          <Field label="Máquina" required>
+            <SearchableSelect
+              value={form.maquina}
+              onChange={v => set('maquina', v)}
+              options={maquinaOptions}
+              placeholder="Seleccionar máquina..."
+            />
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Operario">
-              <select className={SELECT} value={form.operario} onChange={e => set('operario', e.target.value)}>
-                <option value="">Seleccionar...</option>
-                {operarios.map(o => (
-                  <option key={o.Id} value={o.Id}>{o.nombre_operario}</option>
-                ))}
-              </select>
+            <Field label="Operario" required>
+              <SearchableSelect
+                value={form.operario}
+                onChange={v => set('operario', v)}
+                options={operarioOptions}
+                placeholder="Seleccionar..."
+              />
             </Field>
-            <Field label="Líder de Turno">
-              <select className={SELECT} value={form.lider_turno} onChange={e => set('lider_turno', e.target.value)}>
-                <option value="">Seleccionar...</option>
-                {operarios.map(o => (
-                  <option key={o.Id} value={o.Id}>{o.nombre_operario}</option>
-                ))}
-              </select>
+            <Field label="Líder de Turno" required>
+              <SearchableSelect
+                value={form.lider_turno}
+                onChange={v => set('lider_turno', v)}
+                options={operarioOptions}
+                placeholder="Seleccionar..."
+              />
             </Field>
           </div>
 
           <div className="grid grid-cols-3 gap-4">
-            <Field label="Producción">
+            <Field label="Producción" required>
               <input type="number" min="0" className={INPUT} value={form.produccion}
                 onChange={e => set('produccion', e.target.value)} />
             </Field>
-            <Field label="Clase B">
+            <Field label="Clase B" required>
               <input type="number" min="0" className={INPUT} value={form.clase_b}
                 onChange={e => set('clase_b', e.target.value)} />
             </Field>
-            <Field label="Desecho">
+            <Field label="Desecho" required>
               <input type="number" min="0" className={INPUT} value={form.desecho}
                 onChange={e => set('desecho', e.target.value)} />
             </Field>
@@ -209,12 +307,14 @@ function RegistroModal({ onClose }: { onClose: () => void }) {
 }
 
 export default function Orders() {
-  const [tab, setTab] = useState<'ordenes' | 'registros'>('ordenes')
+  const [tab, setTab] = useState<'ordenes' | 'registros'>('registros')
   const [buscar, setBuscar] = useState('')
   const [estado, setEstado] = useState('')
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [showModal, setShowModal] = useState(false)
+  const [mesesAtras, setMesesAtras] = useState(2)
+  const [regBuscar, setRegBuscar] = useState('')
 
   // Órdenes
   const { data, isLoading } = useQuery({
@@ -226,15 +326,37 @@ export default function Orders() {
   const total: number = data?.total ?? 0
   const filtradas = estado ? ordenes.filter(o => o.estado === estado) : ordenes
 
-  // Registros de hoy
-  const today = format(new Date(), 'yyyy-MM-dd')
+  // Registros — últimos N meses
+  const today = new Date()
+  const fechaFin = format(today, 'yyyy-MM-dd')
+  const fechaInicio = format(subMonths(today, mesesAtras), 'yyyy-MM-dd')
   const { data: regData, isLoading: regLoading } = useQuery({
-    queryKey: ['registros', today],
-    queryFn: () => getRegistros({ fecha: today, page: 1, page_size: 50 }),
+    queryKey: ['registros', fechaInicio, fechaFin],
+    queryFn: () => getRegistros({ fecha_inicio: fechaInicio, fecha_fin: fechaFin, page: 1, page_size: 500 }),
     enabled: tab === 'registros',
   })
   const registros: Registro[] = regData?.items ?? []
   const regTotal: number = regData?.total ?? 0
+
+  const regFiltrados = regBuscar.trim()
+    ? registros.filter(r => {
+        const q = regBuscar.toLowerCase()
+        const campos = [
+          format(new Date(r.fecha), 'dd/MM/yyyy HH:mm'),
+          String(r.numero_op),
+          r.item,
+          r.maquina_nombre,
+          r.operario_nombre,
+          r.lider_nombre,
+          String(r.produccion),
+          String(r.clase_b ?? ''),
+          String(r.desecho ?? ''),
+          r.lote,
+          String(r.kg_lote ?? ''),
+        ]
+        return campos.some(c => c?.toString().toLowerCase().includes(q))
+      })
+    : registros
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -245,7 +367,7 @@ export default function Orders() {
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h2 className="text-2xl font-bold text-gray-800">Órdenes de Producción</h2>
+        <h2 className="text-2xl font-bold text-gray-800">Registros de Producción</h2>
         <button
           onClick={() => setShowModal(true)}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
@@ -257,8 +379,8 @@ export default function Orders() {
       {/* Tabs */}
       <div className="flex gap-1 border-b">
         {[
+          { key: 'registros', label: `Registros${regTotal > 0 ? ` (${regTotal})` : ''}` },
           { key: 'ordenes',   label: 'Órdenes' },
-          { key: 'registros', label: `Registros de Hoy${regTotal > 0 ? ` (${regTotal})` : ''}` },
         ].map(t => (
           <button key={t.key}
             onClick={() => setTab(t.key as typeof tab)}
@@ -360,21 +482,50 @@ export default function Orders() {
 
       {tab === 'registros' && (
         <>
-          <p className="text-sm text-gray-500">{regTotal} registros hoy ({format(new Date(), 'dd/MM/yyyy')})</p>
-          {regLoading && <p className="text-gray-400 text-sm">Cargando...</p>}
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="relative w-full sm:w-80">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={regBuscar}
+                onChange={e => setRegBuscar(e.target.value)}
+                placeholder="Buscar en cualquier columna..."
+                className="w-full border rounded-lg pl-9 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+              {regBuscar && (
+                <button
+                  onClick={() => setRegBuscar('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label="Limpiar búsqueda"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+            <p className="text-sm text-gray-500">
+              {regLoading
+                ? 'Cargando...'
+                : regBuscar.trim()
+                  ? `${regFiltrados.length} de ${regTotal} registros — del ${format(subMonths(today, mesesAtras), 'dd/MM/yyyy')} al ${format(today, 'dd/MM/yyyy')}`
+                  : `${regTotal} registros — del ${format(subMonths(today, mesesAtras), 'dd/MM/yyyy')} al ${format(today, 'dd/MM/yyyy')}`
+              }
+            </p>
+          </div>
 
           <div className="overflow-x-auto rounded-xl shadow-sm border bg-white">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  {['Hora', 'OP / Producto', 'Máquina', 'Operario', 'Producción', 'Clase B', 'Desecho'].map(h => (
+                  {['Fecha', 'Hora', 'OP / Producto', 'Máquina', 'Operario', 'Producción', 'Clase B', 'Desecho'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {registros.map(r => (
+                {regFiltrados.map(r => (
                   <tr key={r.Id} className="hover:bg-gray-50 transition">
+                    <td className="px-4 py-3 text-gray-500 text-xs font-mono">
+                      {format(new Date(r.fecha), 'dd/MM/yy')}
+                    </td>
                     <td className="px-4 py-3 text-gray-500 text-xs font-mono">
                       {format(new Date(r.fecha), 'HH:mm')}
                     </td>
@@ -389,11 +540,24 @@ export default function Orders() {
                     <td className="px-4 py-3 text-red-500">{r.desecho ?? 0}</td>
                   </tr>
                 ))}
-                {registros.length === 0 && !regLoading && (
-                  <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Sin registros hoy</td></tr>
+                {regFiltrados.length === 0 && !regLoading && (
+                  <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">
+                    {regBuscar.trim() ? 'Sin coincidencias para la búsqueda' : 'Sin registros en este período'}
+                  </td></tr>
                 )}
               </tbody>
             </table>
+          </div>
+
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={() => setMesesAtras(m => m + 1)}
+              disabled={regLoading}
+              className="flex items-center gap-2 px-5 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition"
+            >
+              <ChevronDown size={16} />
+              Ver mes anterior ({format(subMonths(today, mesesAtras + 1), 'MM/yyyy')})
+            </button>
           </div>
         </>
       )}

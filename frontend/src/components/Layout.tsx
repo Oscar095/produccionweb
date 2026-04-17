@@ -8,8 +8,8 @@ import {
 } from 'lucide-react'
 
 const NAV = [
+  { to: '/orders',      label: 'Registros de Producción', Icon: PackageSearch,   modulo: 'ordenes' },
   { to: '/dashboard',   label: 'Dashboard',    Icon: LayoutDashboard, modulo: 'dashboard' },
-  { to: '/orders',      label: 'Órdenes',       Icon: PackageSearch,   modulo: 'ordenes' },
   { to: '/gantt',       label: 'Gantt',         Icon: GitBranch,       modulo: 'gantt' },
   { to: '/planning',    label: 'Planeación',    Icon: ClipboardList,   modulo: 'planeacion' },
   { to: '/maintenance', label: 'Mantenimiento', Icon: Wrench,          modulo: 'mantenimiento' },

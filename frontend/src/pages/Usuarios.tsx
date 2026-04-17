@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getUsuarios, createUsuario, updateUsuario, deleteUsuario, resetPassword } from '../api/users'
-import { getRoles, createRol, updateRol, deleteRol, updatePermisos } from '../api/roles'
+import { getRoles, createRol, deleteRol, updatePermisos } from '../api/roles'
 import { UserPlus, Pencil, KeyRound, UserX, X, Shield, ShieldPlus, Trash2 } from 'lucide-react'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-type Permiso = { ver: boolean; crear: boolean; editar: boolean; eliminar: boolean }
+type Permiso = { puede_ver: boolean; puede_crear: boolean; puede_editar: boolean; puede_eliminar: boolean }
 type RolPermiso = { modulo: string } & Permiso
 type Rol = { id: number; nombre: string; descripcion?: string; activo: boolean; permisos: RolPermiso[] }
 type Usuario = { id: number; username: string; nombre: string; rol: string; activo: boolean; rol_id?: number; rol_nombre?: string }
@@ -22,10 +22,10 @@ const MODULOS: { clave: string; label: string }[] = [
 ]
 
 const ACCIONES: { key: keyof Permiso; label: string }[] = [
-  { key: 'ver',      label: 'Ver' },
-  { key: 'crear',    label: 'Crear' },
-  { key: 'editar',   label: 'Editar' },
-  { key: 'eliminar', label: 'Eliminar' },
+  { key: 'puede_ver',      label: 'Ver' },
+  { key: 'puede_crear',    label: 'Crear' },
+  { key: 'puede_editar',   label: 'Editar' },
+  { key: 'puede_eliminar', label: 'Eliminar' },
 ]
 
 const INPUT  = 'w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400'
@@ -63,17 +63,17 @@ function MatrizPermisos({
   onChange: (v: RolPermiso[]) => void
 }) {
   const getP = (modulo: string): RolPermiso =>
-    value.find(p => p.modulo === modulo) ?? { modulo, ver: false, crear: false, editar: false, eliminar: false }
+    value.find(p => p.modulo === modulo) ?? { modulo, puede_ver: false, puede_crear: false, puede_editar: false, puede_eliminar: false }
 
   const toggle = (modulo: string, accion: keyof Permiso) => {
     const current = getP(modulo)
     const updated = { ...current, [accion]: !current[accion] }
-    // Si se desactiva 'ver', desactivar todo
-    if (accion === 'ver' && !updated.ver) {
-      updated.crear = false; updated.editar = false; updated.eliminar = false
+    // Si se desactiva 'puede_ver', desactivar todo
+    if (accion === 'puede_ver' && !updated.puede_ver) {
+      updated.puede_crear = false; updated.puede_editar = false; updated.puede_eliminar = false
     }
-    // Si se activa cualquier acción, activar 'ver'
-    if (accion !== 'ver' && updated[accion]) updated.ver = true
+    // Si se activa cualquier acción, activar 'puede_ver'
+    if (accion !== 'puede_ver' && updated[accion]) updated.puede_ver = true
     onChange(value.filter(p => p.modulo !== modulo).concat(updated))
   }
 
@@ -157,7 +157,7 @@ function TabRoles() {
 
       <div className="space-y-3">
         {roles.map(r => {
-          const modulosActivos = r.permisos.filter(p => p.ver).length
+          const modulosActivos = r.permisos.filter(p => p.puede_ver).length
           return (
             <div key={r.id} className="bg-white rounded-xl border shadow-sm p-4 flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -202,7 +202,11 @@ function TabRoles() {
               className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
               {mutCreate.isPending ? 'Guardando...' : 'Crear Rol'}
             </button>
-            {mutCreate.isError && <p className="text-red-500 text-xs text-center">Error al crear el rol</p>}
+            {mutCreate.isError && (
+              <p className="text-red-500 text-xs text-center">
+                {(mutCreate.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Error al crear el rol'}
+              </p>
+            )}
           </div>
         </Modal>
       )}

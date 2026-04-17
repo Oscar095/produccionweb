@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import {
@@ -6,7 +6,7 @@ import {
   getBitacora, createBitacora, getRepuestos, getCatalogos,
 } from '../api/maintenance'
 import { getCenters, getOperarios } from '../api/production'
-import { AlertTriangle, CheckCircle, XCircle, Clock, Plus, X, ChevronRight } from 'lucide-react'
+import { AlertTriangle, CheckCircle, XCircle, Clock, Plus, X, ChevronRight, ChevronDown } from 'lucide-react'
 
 type Ticket = {
   Id: number; fecha: string; ticket: string
@@ -39,6 +39,76 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="space-y-1">
       <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</label>
       {children}
+    </div>
+  )
+}
+
+function SearchableSelect({ value, onChange, options, placeholder = 'Seleccionar...' }: {
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+  placeholder?: string
+}) {
+  const [search, setSearch] = useState('')
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const filtered = options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+  const selected = options.find(o => o.value === value)
+
+  return (
+    <div ref={ref} className="relative">
+      <div
+        className={`${INPUT} bg-white cursor-pointer flex items-center justify-between`}
+        onClick={() => setOpen(v => !v)}
+      >
+        <span className={selected ? 'text-gray-800' : 'text-gray-400'}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <ChevronDown size={14} className="text-gray-400 shrink-0" />
+      </div>
+      {open && (
+        <div className="absolute z-50 w-full bg-white border rounded-lg shadow-lg mt-1 max-h-60 flex flex-col">
+          <div className="p-2 border-b">
+            <input
+              className={INPUT}
+              placeholder="Buscar..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              autoFocus
+              onClick={e => e.stopPropagation()}
+            />
+          </div>
+          <div className="overflow-y-auto">
+            <div
+              className="px-3 py-2 text-sm text-gray-400 hover:bg-gray-50 cursor-pointer"
+              onClick={() => { onChange(''); setSearch(''); setOpen(false) }}
+            >
+              {placeholder}
+            </div>
+            {filtered.map(o => (
+              <div
+                key={o.value}
+                className={`px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 ${o.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-800'}`}
+                onClick={() => { onChange(o.value); setSearch(''); setOpen(false) }}
+              >
+                {o.label}
+              </div>
+            ))}
+            {filtered.length === 0 && (
+              <div className="px-3 py-4 text-sm text-gray-400 text-center">Sin resultados</div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -447,43 +517,45 @@ function NuevoTicketModal({ onClose }: { onClose: () => void }) {
           </Field>
 
           <Field label="Máquina *">
-            <select className={SELECT} value={form.row_maquina} onChange={e => set('row_maquina', e.target.value)}>
-              <option value="">Seleccionar...</option>
-              {maquinas.map(m => <option key={m.Id} value={m.Id}>{m.nombre}</option>)}
-            </select>
+            <SearchableSelect
+              value={form.row_maquina}
+              onChange={v => set('row_maquina', v)}
+              options={maquinas.map(m => ({ value: String(m.Id), label: m.nombre }))}
+            />
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Asunto *">
-              <select className={SELECT} value={form.row_asunto} onChange={e => set('row_asunto', e.target.value)}>
-                <option value="">Seleccionar...</option>
-                {(catalogos?.asuntos ?? []).map((a: Catalogo) => (
-                  <option key={a.Id} value={a.Id}>{a.asunto}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={form.row_asunto}
+                onChange={v => set('row_asunto', v)}
+                options={(catalogos?.asuntos ?? []).map((a: Catalogo) => ({ value: String(a.Id), label: a.asunto ?? '' }))}
+              />
             </Field>
             <Field label="Motivo *">
-              <select className={SELECT} value={form.row_motivo} onChange={e => set('row_motivo', e.target.value)}>
-                <option value="">Seleccionar...</option>
-                {(catalogos?.motivos ?? []).map((m: Catalogo) => (
-                  <option key={m.Id} value={m.Id}>{m.motivo}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={form.row_motivo}
+                onChange={v => set('row_motivo', v)}
+                options={(catalogos?.motivos ?? []).map((m: Catalogo) => ({ value: String(m.Id), label: m.motivo ?? '' }))}
+              />
             </Field>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Reporta *">
-              <select className={SELECT} value={form.row_operario} onChange={e => set('row_operario', e.target.value)}>
-                <option value="">Seleccionar...</option>
-                {operarios.map(o => <option key={o.Id} value={o.Id}>{o.nombre_operario}</option>)}
-              </select>
+              <SearchableSelect
+                value={form.row_operario}
+                onChange={v => set('row_operario', v)}
+                options={operarios.map(o => ({ value: String(o.Id), label: o.nombre_operario }))}
+              />
             </Field>
             <Field label="Mecánico asignado">
-              <select className={SELECT} value={form.row_mecanico} onChange={e => set('row_mecanico', e.target.value)}>
-                <option value="">Sin asignar</option>
-                {mecanicos.map(o => <option key={o.Id} value={o.Id}>{o.nombre_operario}</option>)}
-              </select>
+              <SearchableSelect
+                value={form.row_mecanico}
+                onChange={v => set('row_mecanico', v)}
+                options={mecanicos.map(o => ({ value: String(o.Id), label: o.nombre_operario }))}
+                placeholder="Sin asignar"
+              />
             </Field>
           </div>
 
@@ -554,17 +626,17 @@ export default function Maintenance() {
               className="bg-white rounded-xl border shadow-sm p-4 hover:border-blue-200 hover:shadow-md transition cursor-pointer group">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-3 mb-1">
-                    <span className="font-bold text-gray-800">{t.ticket}</span>
+                  <p className="text-sm font-bold text-gray-800">{t.maquina_nombre}</p>
+                  {t.descripcion_problema && (
+                    <p className="text-sm text-gray-600 mt-0.5 line-clamp-2">{t.descripcion_problema}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="text-xs font-medium text-gray-500">{t.ticket}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${cfg.color}`}>
                       <cfg.Icon size={12} /> {cfg.label}
                     </span>
+                    {t.asunto && <span className="text-xs text-gray-400">{t.asunto}</span>}
                   </div>
-                  <p className="text-sm font-medium text-gray-700">{t.maquina_nombre}</p>
-                  {t.asunto && <p className="text-xs text-gray-500">{t.asunto}</p>}
-                  {t.descripcion_problema && (
-                    <p className="text-sm text-gray-600 mt-1 line-clamp-2">{t.descripcion_problema}</p>
-                  )}
                 </div>
                 <div className="text-right text-xs text-gray-400 shrink-0 space-y-1">
                   <div className="flex items-center gap-1 justify-end">
