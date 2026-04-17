@@ -2,6 +2,9 @@
 KOS Xpress — Sistema de Planeación de Producción
 FastAPI backend — Python 3.11
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
@@ -23,7 +26,7 @@ app = FastAPI(
 # CORS — ajustar en producción con los dominios reales
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
