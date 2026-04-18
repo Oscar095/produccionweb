@@ -26,6 +26,20 @@ jobs:
           source antenv/bin/activate
           pip install -r backend/requirements.txt
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy frontend dist to backend/static
+        run: cp -r frontend/dist backend/static
+
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
