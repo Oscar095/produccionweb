@@ -2,11 +2,12 @@
 Servicio de generación de resúmenes semanales en PDF (ReportLab).
 """
 import os
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import List
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from models.production import Maquina, OpNumero
+from models.production import Maquina, OpNumero, RegistroProduccion
 from models.planning import Asignacion, ResumenSemanal
 from services.planning_engine import get_capacidad_semana, get_feasibility
 
@@ -15,6 +16,101 @@ def _get_week_bounds(semana_inicio: datetime):
     lunes = semana_inicio.replace(hour=0, minute=0, second=0, microsecond=0)
     viernes = lunes + timedelta(days=4, hours=23, minutes=59, seconds=59)
     return lunes, viernes
+
+
+_DIA_NOMBRES = {0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"}
+
+
+def build_production_report(db: Session, semana_inicio: datetime) -> dict:
+    """Construye reporte de producción real agrupado por día y máquina."""
+    lunes, viernes = _get_week_bounds(semana_inicio)
+
+    registros = (
+        db.query(RegistroProduccion)
+        .options(joinedload(RegistroProduccion.maquina_obj))
+        .filter(RegistroProduccion.fecha >= lunes, RegistroProduccion.fecha <= viernes)
+        .all()
+    )
+
+    # Bulk load OPs to avoid N+1
+    ops_doctos = list({r.numero_op for r in registros})
+    ops_map = {}
+    if ops_doctos:
+        ops_map = {o.docto: o for o in db.query(OpNumero).filter(OpNumero.docto.in_(ops_doctos)).all()}
+
+    # Group by date -> machine -> aggregate by OP
+    by_day_machine = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {"produccion": 0, "clase_b": 0, "desecho": 0})))
+    machine_info = {}
+
+    for r in registros:
+        fecha_key = r.fecha.date() if isinstance(r.fecha, datetime) else r.fecha
+        maq_id = r.maquina
+        if r.maquina_obj:
+            machine_info[maq_id] = r.maquina_obj.nombre
+        agg = by_day_machine[fecha_key][maq_id][r.numero_op]
+        agg["produccion"] += r.produccion or 0
+        agg["clase_b"] += r.clase_b or 0
+        agg["desecho"] += r.desecho or 0
+
+    # Build response
+    dias = []
+    current = lunes.date() if isinstance(lunes, datetime) else lunes
+    end = viernes.date() if isinstance(viernes, datetime) else viernes
+
+    while current <= end:
+        day_data = by_day_machine.get(current, {})
+        maquinas_list = []
+        total_dia_produccion = 0
+        total_dia_clase_b = 0
+        total_dia_desecho = 0
+
+        for maq_id in sorted(day_data.keys()):
+            regs = []
+            total_maq_prod = 0
+            total_maq_b = 0
+            total_maq_des = 0
+
+            for num_op, agg in sorted(day_data[maq_id].items()):
+                op = ops_map.get(num_op)
+                regs.append({
+                    "numero_op": num_op,
+                    "item": op.item if op else None,
+                    "marca": op.marca if op else None,
+                    "produccion": agg["produccion"],
+                    "clase_b": agg["clase_b"],
+                    "desecho": agg["desecho"],
+                })
+                total_maq_prod += agg["produccion"]
+                total_maq_b += agg["clase_b"]
+                total_maq_des += agg["desecho"]
+
+            maquinas_list.append({
+                "maquina_id": maq_id,
+                "maquina_nombre": machine_info.get(maq_id, f"Máquina {maq_id}"),
+                "registros": regs,
+                "total_produccion": total_maq_prod,
+                "total_clase_b": total_maq_b,
+                "total_desecho": total_maq_des,
+            })
+            total_dia_produccion += total_maq_prod
+            total_dia_clase_b += total_maq_b
+            total_dia_desecho += total_maq_des
+
+        dias.append({
+            "fecha": current.isoformat(),
+            "dia_nombre": _DIA_NOMBRES.get(current.weekday(), ""),
+            "maquinas": maquinas_list,
+            "total_dia_produccion": total_dia_produccion,
+            "total_dia_clase_b": total_dia_clase_b,
+            "total_dia_desecho": total_dia_desecho,
+        })
+        current += timedelta(days=1)
+
+    return {
+        "semana_inicio": lunes.isoformat(),
+        "semana_fin": viernes.isoformat(),
+        "dias": dias,
+    }
 
 
 def build_weekly_summary(db: Session, semana_inicio: datetime) -> dict:

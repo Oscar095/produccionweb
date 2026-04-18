@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, subMonths } from 'date-fns'
 import { getOrders, getRegistros, createRegistro, getCenters, getOperarios } from '../api/production'
-import { Search, Plus, X, ChevronDown, Check } from 'lucide-react'
+import { Search, Plus, X, ChevronDown, Check, Loader2 } from 'lucide-react'
 
 type Orden = {
   Id: number; docto: number; item: string; marca?: string; lote?: string
@@ -40,8 +40,11 @@ function Field({ label, children, required }: { label: string; children: React.R
 
 type Option = { value: string | number; label: string; sub?: string; searchText?: string }
 
+const MAX_VISIBLE = 50
+
 function SearchableSelect({
-  value, onChange, options, placeholder = 'Seleccionar...', emptyText = 'Sin coincidencias', disabled,
+  value, onChange, options, placeholder = 'Seleccionar...', emptyText = 'Sin coincidencias',
+  disabled, onSearchChange, loading, initialPrompt,
 }: {
   value: string
   onChange: (v: string) => void
@@ -49,10 +52,17 @@ function SearchableSelect({
   placeholder?: string
   emptyText?: string
   disabled?: boolean
+  /** When provided, parent handles filtering (server-side search). Component skips local filter. */
+  onSearchChange?: (q: string) => void
+  /** Show spinner when parent is fetching results */
+  loading?: boolean
+  /** Message shown when search is empty and no options provided (server-side mode) */
+  initialPrompt?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
+  const isRemote = !!onSearchChange
 
   useEffect(() => {
     if (!open) return
@@ -63,17 +73,38 @@ function SearchableSelect({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  useEffect(() => { if (!open) setSearch('') }, [open])
+  useEffect(() => {
+    if (!open) {
+      setSearch('')
+      if (onSearchChange) onSearchChange('')
+    }
+  }, [open])
+
+  const handleSearch = (val: string) => {
+    setSearch(val)
+    if (onSearchChange) onSearchChange(val)
+  }
 
   const q = search.trim().toLowerCase()
-  const filtered = q
-    ? options.filter(o => {
-        const hay = (o.searchText ?? `${o.label} ${o.sub ?? ''}`).toLowerCase()
-        return hay.includes(q)
-      })
-    : options
+
+  // In remote mode, parent provides already-filtered options. In local mode, filter here.
+  const filtered = isRemote
+    ? options
+    : q
+      ? options.filter(o => {
+          const hay = (o.searchText ?? `${o.label} ${o.sub ?? ''}`).toLowerCase()
+          return hay.includes(q)
+        })
+      : options
+
+  const needsSearch = !isRemote && !q && options.length > MAX_VISIBLE
+  const visible = filtered.slice(0, MAX_VISIBLE)
+  const hiddenCount = filtered.length - visible.length
 
   const selected = options.find(o => String(o.value) === value)
+
+  // In remote mode with no search text, show prompt
+  const showInitialPrompt = isRemote && !q && options.length === 0 && !loading
 
   return (
     <div ref={containerRef} className="relative">
@@ -97,36 +128,60 @@ function SearchableSelect({
               <input
                 autoFocus
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={e => handleSearch(e.target.value)}
                 placeholder="Buscar..."
                 className="w-full border rounded pl-8 pr-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
               />
+              {loading && (
+                <Loader2 size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-blue-500 animate-spin" />
+              )}
             </div>
           </div>
           <div className="overflow-y-auto flex-1">
-            {filtered.length === 0 ? (
+            {loading ? (
+              <div className="p-3 text-xs text-gray-400 text-center">Buscando...</div>
+            ) : showInitialPrompt ? (
+              <div className="p-3 text-xs text-gray-400 text-center">
+                {initialPrompt ?? 'Escribe para buscar...'}
+              </div>
+            ) : needsSearch ? (
+              <div className="p-3 text-xs text-gray-400 text-center">
+                Escribe para buscar entre {options.length} opciones...
+              </div>
+            ) : visible.length === 0 ? (
               <div className="p-3 text-xs text-gray-400 text-center">{emptyText}</div>
-            ) : filtered.map(o => {
-              const isSel = String(o.value) === value
-              return (
-                <button
-                  key={o.value}
-                  type="button"
-                  onClick={() => { onChange(String(o.value)); setOpen(false) }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-start gap-2 hover:bg-blue-50 transition ${isSel ? 'bg-blue-50' : ''}`}
-                >
-                  <Check size={14} className={`mt-0.5 flex-shrink-0 ${isSel ? 'text-blue-600' : 'text-transparent'}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className={`truncate ${isSel ? 'font-semibold text-blue-700' : 'text-gray-700'}`}>{o.label}</div>
-                    {o.sub && <div className="text-xs text-gray-500 truncate">{o.sub}</div>}
+            ) : (
+              <>
+                {visible.map(o => {
+                  const isSel = String(o.value) === value
+                  return (
+                    <button
+                      key={o.value}
+                      type="button"
+                      onClick={() => { onChange(String(o.value)); setOpen(false) }}
+                      className={`w-full text-left px-3 py-2 text-sm flex items-start gap-2 hover:bg-blue-50 transition ${isSel ? 'bg-blue-50' : ''}`}
+                    >
+                      <Check size={14} className={`mt-0.5 flex-shrink-0 ${isSel ? 'text-blue-600' : 'text-transparent'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className={`truncate ${isSel ? 'font-semibold text-blue-700' : 'text-gray-700'}`}>{o.label}</div>
+                        {o.sub && <div className="text-xs text-gray-500 truncate">{o.sub}</div>}
+                      </div>
+                    </button>
+                  )
+                })}
+                {hiddenCount > 0 && (
+                  <div className="p-2 text-xs text-gray-400 text-center border-t">
+                    +{hiddenCount} más — refina tu búsqueda
                   </div>
-                </button>
-              )
-            })}
+                )}
+              </>
+            )}
           </div>
-          <div className="px-3 py-1.5 border-t bg-gray-50 text-xs text-gray-500">
-            {filtered.length} de {options.length}
-          </div>
+          {!showInitialPrompt && !loading && (
+            <div className="px-3 py-1.5 border-t bg-gray-50 text-xs text-gray-500">
+              {filtered.length} resultado{filtered.length !== 1 ? 's' : ''}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -171,7 +226,7 @@ function RegistroModal({ onClose }: { onClose: () => void }) {
       value: o.docto,
       label: `OP ${o.docto} — ${o.item}`,
       sub: extras || undefined,
-      searchText: [o.docto, o.item, o.marca, o.ext1, o.ext2, o.lote, o.und_medida].filter(Boolean).join(' '),
+      searchText: [String(o.docto), o.item, o.marca, o.ext1, o.ext2, o.lote, o.und_medida].filter(Boolean).join(' '),
     }
   })
 
@@ -214,13 +269,13 @@ function RegistroModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-white flex-shrink-0">
           <h3 className="font-semibold text-gray-800">Registrar Producción</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
 
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
           <Field label="Fecha y hora" required>
             <input type="datetime-local" className={INPUT} value={form.fecha}
               onChange={e => set('fecha', e.target.value)} />

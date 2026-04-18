@@ -9,5 +9,8 @@ export const generateWeeklyPDF = (semana?: string) =>
     responseType: 'blob',
   }).then(r => r.data)
 
+export const getProductionData = (semana?: string) =>
+  api.get('/api/reports/production', { params: semana ? { semana } : undefined }).then(r => r.data)
+
 export const getReportHistory = () =>
   api.get('/api/reports/weekly/history').then(r => r.data)

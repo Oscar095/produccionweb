@@ -16,7 +16,7 @@ class Rol(Base):
     nombre      = Column(String(100), nullable=False, unique=True)
     descripcion = Column(String(255))
     activo      = Column(Boolean, default=True)
-    created_at  = Column(DateTime)
+    created_at  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     permisos = relationship("RolPermiso", back_populates="rol", cascade="all, delete-orphan")
     usuarios = relationship("Usuario", back_populates="rol_obj")

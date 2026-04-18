@@ -39,7 +39,7 @@ def _build_sqlalchemy_url() -> str:
     password_enc = quote_plus(password)
     user_enc     = quote_plus(user)
 
-    driver = "ODBC+Driver+17+for+SQL+Server"
+    driver = "ODBC+Driver+18+for+SQL+Server"
     url = (
         f"mssql+pyodbc://{user_enc}:{password_enc}@{server}/{database}"
         f"?driver={driver}&Encrypt=yes&TrustServerCertificate=no"

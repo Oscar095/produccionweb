@@ -8,13 +8,13 @@ import {
 } from 'lucide-react'
 
 const NAV = [
+  { to: '/dashboard',   label: 'Dashboard',               Icon: LayoutDashboard, modulo: 'dashboard' },
+  { to: '/gantt',       label: 'Gantt',                   Icon: GitBranch,       modulo: 'gantt' },
   { to: '/orders',      label: 'Registros de Producción', Icon: PackageSearch,   modulo: 'ordenes' },
-  { to: '/dashboard',   label: 'Dashboard',    Icon: LayoutDashboard, modulo: 'dashboard' },
-  { to: '/gantt',       label: 'Gantt',         Icon: GitBranch,       modulo: 'gantt' },
-  { to: '/planning',    label: 'Planeación',    Icon: ClipboardList,   modulo: 'planeacion' },
-  { to: '/maintenance', label: 'Mantenimiento', Icon: Wrench,          modulo: 'mantenimiento' },
-  { to: '/reports',     label: 'Reportes',      Icon: FileText,        modulo: 'reportes' },
-  { to: '/usuarios',    label: 'Usuarios',      Icon: Users,           modulo: 'usuarios' },
+  { to: '/maintenance', label: 'Mantenimiento',           Icon: Wrench,          modulo: 'mantenimiento' },
+  { to: '/planning',    label: 'Planeación',              Icon: ClipboardList,   modulo: 'planeacion' },
+  { to: '/reports',     label: 'Reportes',                Icon: FileText,        modulo: 'reportes' },
+  { to: '/usuarios',    label: 'Usuarios',                Icon: Users,           modulo: 'usuarios' },
 ]
 
 function getInitialBanner(): boolean {

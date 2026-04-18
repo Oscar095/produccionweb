@@ -47,7 +47,7 @@ def _registro_to_out(r: RegistroProduccion, db: Session) -> RegistroProduccionOu
 @router.get("/orders", response_model=dict)
 def list_orders(
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+    page_size: int = Query(default=50, ge=1, le=2000),
     estado: Optional[str] = Query(default=None),
     buscar: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
@@ -55,10 +55,17 @@ def list_orders(
 ):
     q = db.query(OpNumero)
     if buscar:
+        like = f"%{buscar}%"
         q = q.filter(
             or_(
-                OpNumero.item.ilike(f"%{buscar}%"),
-                OpNumero.marca.ilike(f"%{buscar}%"),
+                OpNumero.item.ilike(like),
+                OpNumero.marca.ilike(like),
+                OpNumero.ext1.ilike(like),         # referencia/color
+                OpNumero.ext2.ilike(like),         # máquina sugerida
+                OpNumero.lote.ilike(like),
+                OpNumero.cod_barras.ilike(like),
+                OpNumero.und_medida.ilike(like),
+                OpNumero.tipo_inv.ilike(like),
                 OpNumero.docto == (int(buscar) if buscar.isdigit() else -1),
             )
         )
@@ -159,10 +166,12 @@ def list_operarios(
 @router.get("/registros", response_model=dict)
 def list_registros(
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=100),
+    page_size: int = Query(default=100, ge=1, le=500),
     maquina_id: Optional[int] = None,
     numero_op: Optional[int] = None,
-    fecha: Optional[date] = Query(default=None, description="Filtrar por fecha (YYYY-MM-DD)"),
+    fecha: Optional[date] = Query(default=None, description="Filtrar por fecha exacta (YYYY-MM-DD)"),
+    fecha_inicio: Optional[date] = Query(default=None, description="Desde fecha (YYYY-MM-DD)"),
+    fecha_fin: Optional[date] = Query(default=None, description="Hasta fecha (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -173,10 +182,48 @@ def list_registros(
         q = q.filter(RegistroProduccion.numero_op == numero_op)
     if fecha:
         q = q.filter(cast(RegistroProduccion.fecha, Date) == fecha)
+    if fecha_inicio:
+        q = q.filter(cast(RegistroProduccion.fecha, Date) >= fecha_inicio)
+    if fecha_fin:
+        q = q.filter(cast(RegistroProduccion.fecha, Date) <= fecha_fin)
 
     total = q.count()
     registros = q.order_by(RegistroProduccion.fecha.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    items = [_registro_to_out(r, db) for r in registros]
+
+    # Bulk fetch related entities to avoid N+1 queries
+    maquina_ids = {r.maquina for r in registros}
+    op_doctos = {r.numero_op for r in registros}
+    personal_ids = {r.operario for r in registros} | {r.lider_turno for r in registros}
+
+    maquinas_map = {m.Id: m for m in db.query(Maquina).filter(Maquina.Id.in_(maquina_ids)).all()} if maquina_ids else {}
+    ops_map = {op.docto: op for op in db.query(OpNumero).filter(OpNumero.docto.in_(op_doctos)).all()} if op_doctos else {}
+    personal_map = {p.Id: p for p in db.query(PersonalPlanta).filter(PersonalPlanta.Id.in_(personal_ids)).all()} if personal_ids else {}
+
+    items = []
+    for r in registros:
+        maq = maquinas_map.get(r.maquina)
+        op = ops_map.get(r.numero_op)
+        oper = personal_map.get(r.operario)
+        lider = personal_map.get(r.lider_turno)
+        items.append(RegistroProduccionOut(
+            Id=r.Id,
+            fecha=r.fecha,
+            maquina=r.maquina,
+            maquina_nombre=maq.nombre if maq else None,
+            numero_op=r.numero_op,
+            item=op.item if op else None,
+            operario=r.operario,
+            operario_nombre=oper.nombre_operario if oper else None,
+            produccion=r.produccion,
+            clase_b=r.clase_b,
+            desecho=r.desecho,
+            lider_turno=r.lider_turno,
+            lider_nombre=lider.nombre_operario if lider else None,
+            lote=r.lote,
+            kg_lote=r.kg_lote,
+            created_at=r.created_at,
+        ))
+
     return {"total": total, "page": page, "page_size": page_size, "items": [i.model_dump() for i in items]}
 
 

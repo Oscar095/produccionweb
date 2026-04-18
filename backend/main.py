@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from database import engine, Base
 from models import *   # registra todos los modelos con Base
 
@@ -63,6 +65,22 @@ def startup():
     )
 
 
-@app.get("/", tags=["health"])
+@app.get("/health", tags=["health"])
 def health():
     return {"status": "ok", "app": "KOS Xpress", "version": "1.0.0"}
+
+
+# Servir frontend estático (solo si existe el build)
+_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/assets", StaticFiles(directory=os.path.join(_static_dir, "assets")), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str = ""):
+        # Servir archivos estáticos que existen (favicon, robots.txt, etc.)
+        candidate = os.path.join(_static_dir, full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        # Todo lo demás → index.html (React Router se encarga del routing)
+        return FileResponse(os.path.join(_static_dir, "index.html"))

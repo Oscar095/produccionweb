@@ -7,11 +7,24 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_roles
 from models.planning import ResumenSemanal, Usuario
-from services.report_service import build_weekly_summary, generate_pdf
+from services.report_service import build_weekly_summary, build_production_report, generate_pdf
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 PDF_DIR = os.path.join(os.path.dirname(__file__), "..", "pdfs")
+
+
+@router.get("/production")
+def get_production_data(
+    semana: Optional[datetime] = Query(default=None, description="Lunes de la semana"),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    if semana is None:
+        hoy = datetime.utcnow().date()
+        lunes = hoy - timedelta(days=hoy.weekday())
+        semana = datetime.combine(lunes, datetime.min.time())
+    return build_production_report(db, semana)
 
 
 @router.get("/weekly")

@@ -57,20 +57,26 @@ def create_rol(
     db: Session = Depends(get_db),
     _=Depends(require_roles("Administrador")),
 ):
-    if db.query(Rol).filter(Rol.nombre == body.nombre).first():
+    if db.query(Rol).filter(Rol.nombre == body.nombre, Rol.activo == True).first():
         raise HTTPException(status_code=400, detail="Ya existe un rol con ese nombre")
-    rol = Rol(nombre=body.nombre, descripcion=body.descripcion)
-    db.add(rol)
-    db.flush()
-    for p in body.permisos:
-        db.add(RolPermiso(
-            rol_id=rol.id, modulo=p.modulo,
-            puede_ver=p.puede_ver, puede_crear=p.puede_crear,
-            puede_editar=p.puede_editar, puede_eliminar=p.puede_eliminar,
-        ))
-    db.commit()
-    db.refresh(rol)
-    return _to_out(rol)
+    try:
+        rol = Rol(nombre=body.nombre, descripcion=body.descripcion)
+        db.add(rol)
+        db.flush()
+        for p in body.permisos:
+            db.add(RolPermiso(
+                rol_id=rol.id, modulo=p.modulo,
+                puede_ver=p.puede_ver, puede_crear=p.puede_crear,
+                puede_editar=p.puede_editar, puede_eliminar=p.puede_eliminar,
+            ))
+        db.commit()
+        db.refresh(rol)
+        return _to_out(rol)
+    except Exception as e:
+        db.rollback()
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error al crear rol: {type(e).__name__}: {str(e)}")
 
 
 @router.patch("/{rol_id}", response_model=RolOut)
