@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, subMonths } from 'date-fns'
 import { getOrders, getRegistros, createRegistro, getCenters, getOperarios } from '../api/production'
