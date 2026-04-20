@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/auth'
 import {
-  LayoutDashboard, GitBranch, ClipboardList,
+  LayoutDashboard, GitBranch,
   Wrench, FileText, LogOut, Users, PackageSearch,
   Menu, X, ChevronUp, ChevronDown, Settings,
 } from 'lucide-react'
