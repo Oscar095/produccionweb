@@ -30,6 +30,8 @@ class Maquina(Base):
     capacidad_hora   = Column(Integer, nullable=False)   # unidades por hora
     centro_costos_id = Column(Integer, ForeignKey("dbo.centro_costos.Id"), nullable=False)
     estado           = Column(Integer, ForeignKey("dbo.estados_maquinas.Id"), nullable=False)
+    rutas_siesa      = Column(Text)                       # nombre/descripción de la ruta SIESA
+    rutas_siesa_id   = Column(Integer, index=True)        # ID que matchea con op_numeros.ruta_op
 
     centro_costos      = relationship("CentroCostos", back_populates="maquinas")
     estado_obj         = relationship("EstadoMaquina")
@@ -66,6 +68,8 @@ class OpNumero(Base):
     cantidad      = Column(Integer)                    # qty pedida
     cod_barras    = Column(String(50))
     cant_consumida = Column(Integer)                   # qty producida hasta ahora
+    f851_fecha_terminacion = Column(DateTime)           # fecha de entrega/terminación
+    ruta_op        = Column(Integer)
 
     # No relationship to Asignacion — se consulta via Asignacion.op_docto == docto
 

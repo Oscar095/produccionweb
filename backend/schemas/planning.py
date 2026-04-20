@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel
 
 
@@ -80,3 +80,36 @@ class CapacidadMaquinaOut(BaseModel):
     horas_asignadas: float
     horas_paradas: float
     sobrecargada: bool
+
+
+class KanbanOrdenOut(BaseModel):
+    op_docto: int
+    item: Optional[str] = None
+    marca: Optional[str] = None
+    calibre: Optional[str] = None
+    cantidad: Optional[int] = None
+    cant_consumida: Optional[int] = None
+    estado_op: Optional[str] = None
+    pct_completado: Optional[float] = None
+    horas_estimadas: Optional[float] = None
+    fecha_entrega: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    prioridad: Optional[int] = None
+
+
+class KanbanColumnaOut(BaseModel):
+    maquina_id: int
+    maquina_nombre: str
+    capacidad_hora: int
+    rutas_siesa: Optional[str] = None
+    ordenes: List[KanbanOrdenOut]
+
+
+class KanbanPrioridadItem(BaseModel):
+    op_docto: int
+    prioridad: int
+
+
+class KanbanBulkPrioridadIn(BaseModel):
+    maquina_id: int
+    items: List[KanbanPrioridadItem]

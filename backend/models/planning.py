@@ -3,7 +3,7 @@ Modelos SQLAlchemy para tablas NUEVAS en esquema planeacion.*.
 Estas son las únicas tablas que la plataforma escribe.
 """
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -97,6 +97,26 @@ class ParadaProgramada(Base):
 
     maquina_obj   = relationship("Maquina", back_populates="paradas_programadas")
     creado_por    = relationship("Usuario")
+
+
+class KanbanPrioridad(Base):
+    """
+    Orden manual del Kanban por máquina.
+    Clave: (maquina_id, op_docto). OPs sin fila se ordenan por OpNumero.created_at ASC.
+    """
+    __tablename__ = "kanban_prioridades"
+    __table_args__ = (
+        UniqueConstraint("maquina_id", "op_docto", name="uq_kanban_maq_op"),
+        {"schema": "planeacion"},
+    )
+
+    id         = Column(Integer, primary_key=True, index=True)
+    maquina_id = Column(Integer, ForeignKey("dbo.maquinas.Id"), nullable=False, index=True)
+    op_docto   = Column(Integer, nullable=False, index=True)
+    prioridad  = Column(Integer, nullable=False, default=100)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
 
 
 class ResumenSemanal(Base):

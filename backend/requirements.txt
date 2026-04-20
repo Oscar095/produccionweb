@@ -11,3 +11,4 @@ python-multipart
 reportlab
 pandas
 python-dotenv
+httpx
