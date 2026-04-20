@@ -4,17 +4,19 @@ import { useAuthStore } from '../store/auth'
 import {
   LayoutDashboard, GitBranch, ClipboardList,
   Wrench, FileText, LogOut, Users, PackageSearch,
-  Menu, X, ChevronUp, ChevronDown,
+  Menu, X, ChevronUp, ChevronDown, Settings,
 } from 'lucide-react'
+import PlanningLogo from './PlanningLogo'
 
 const NAV = [
-  { to: '/dashboard',   label: 'Dashboard',               Icon: LayoutDashboard, modulo: 'dashboard' },
-  { to: '/gantt',       label: 'Gantt',                   Icon: GitBranch,       modulo: 'gantt' },
-  { to: '/orders',      label: 'Registros de Producción', Icon: PackageSearch,   modulo: 'ordenes' },
-  { to: '/maintenance', label: 'Mantenimiento',           Icon: Wrench,          modulo: 'mantenimiento' },
-  { to: '/planning',    label: 'Planeación',              Icon: ClipboardList,   modulo: 'planeacion' },
-  { to: '/reports',     label: 'Reportes',                Icon: FileText,        modulo: 'reportes' },
-  { to: '/usuarios',    label: 'Usuarios',                Icon: Users,           modulo: 'usuarios' },
+  { to: '/dashboard',      label: 'Dashboard',               Icon: LayoutDashboard, modulo: 'dashboard' },
+  { to: '/gantt',          label: 'Gantt',                   Icon: GitBranch,       modulo: 'gantt' },
+  { to: '/orders',         label: 'Registros de Producción', Icon: PackageSearch,   modulo: 'ordenes' },
+  { to: '/maintenance',    label: 'Mantenimiento',           Icon: Wrench,          modulo: 'mantenimiento' },
+  { to: '/planning',       label: 'Planeación',              Icon: PlanningLogo,    modulo: 'planeacion' },
+  { to: '/reports',        label: 'Reportes',                Icon: FileText,        modulo: 'reportes' },
+  { to: '/usuarios',       label: 'Usuarios',                Icon: Users,           modulo: 'usuarios' },
+  { to: '/configuracion',  label: 'Configuración',           Icon: Settings,        modulo: 'configuracion' },
 ]
 
 function getInitialBanner(): boolean {
@@ -58,7 +60,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <div className="border-b border-blue-800">
         {bannerVisible && (
           <div className="px-5 pt-6 pb-3">
-            <h1 className="text-lg font-bold leading-tight">KOS Xpress</h1>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="text-blue-200">
+                <PlanningLogo size={20} />
+              </div>
+              <h1 className="text-lg font-bold leading-tight">Planeación KOS</h1>
+            </div>
             <p className="text-xs text-blue-300 mt-0.5">Planeación de Producción</p>
           </div>
         )}
@@ -136,7 +143,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Mobile top-bar — only visible below md */}
         <header className="flex md:hidden items-center justify-between px-4 py-3 bg-blue-900 text-white shrink-0">
-          <span className="text-sm font-bold">KOS Xpress</span>
+          <div className="flex items-center gap-2">
+            <div className="text-blue-200">
+              <PlanningLogo size={18} />
+            </div>
+            <span className="text-sm font-bold">Planeación KOS</span>
+          </div>
           <button
             onClick={() => setMobileOpen(prev => !prev)}
             className="p-1.5 rounded-lg hover:bg-blue-800 transition"

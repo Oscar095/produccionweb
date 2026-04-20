@@ -1,6 +1,6 @@
 import { api } from './client'
 
-export const getBoard = (params?: { semana?: string; maquina_id?: number }) =>
+export const getBoard = (params?: { maquina_id?: number }) =>
   api.get('/api/planning/board', { params }).then(r => r.data)
 
 export const getCapacidad = (semana?: string) =>
@@ -18,11 +18,17 @@ export const updateAsignacion = (id: number, data: unknown) =>
 export const bulkPrioridades = (items: Array<{ asignacion_id: number; prioridad: number }>) =>
   api.patch('/api/planning/prioridades', items).then(r => r.data)
 
+export const reordenarPorFecha = (maquina_id: number) =>
+  api.post(`/api/planning/asignaciones/reordenar-por-fecha/${maquina_id}`).then(r => r.data)
+
 export const suspenderOrden = (id: number, motivo: string) =>
   api.patch(`/api/planning/asignaciones/${id}/suspender`, { motivo }).then(r => r.data)
 
 export const reactivarOrden = (id: number) =>
   api.patch(`/api/planning/asignaciones/${id}/reactivar`).then(r => r.data)
+
+export const getTimeline = () =>
+  api.get('/api/planning/timeline').then(r => r.data)
 
 export const createParada = (data: unknown) =>
   api.post('/api/planning/paradas', data).then(r => r.data)
