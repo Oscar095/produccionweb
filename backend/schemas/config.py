@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class CentroCostosOut(BaseModel):
@@ -20,19 +20,27 @@ class RutaSiesaOut(BaseModel):
     id: int
     nombre_ruta: str
     descripcion: Optional[str] = None
+    orden: int = 0
     activo: bool
 
     model_config = {"from_attributes": True}
+
+    @field_validator("orden", mode="before")
+    @classmethod
+    def _orden_default(cls, v):
+        return 0 if v is None else v
 
 
 class RutaSiesaCreate(BaseModel):
     nombre_ruta: str
     descripcion: Optional[str] = None
+    orden: Optional[int] = 0
 
 
 class RutaSiesaUpdate(BaseModel):
     nombre_ruta: Optional[str] = None
     descripcion: Optional[str] = None
+    orden: Optional[int] = None
     activo: Optional[bool] = None
 
 

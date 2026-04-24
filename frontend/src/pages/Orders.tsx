@@ -14,6 +14,7 @@ type Orden = {
   Id: number; docto: number; item: string; marca?: string; lote?: string
   cantidad?: number; cant_consumida?: number; estado: string; pct_completado: number
   und_medida?: string; created_at?: string; ext1?: string; ext2?: string
+  ruta_op?: string
 }
 type Registro = {
   Id: number; fecha: string; maquina: number; maquina_nombre?: string
@@ -633,6 +634,7 @@ export default function Orders() {
                       </th>
                       <th className="px-5 py-4 text-left font-semibold text-slate-600 hidden md:table-cell">Marca</th>
                       <th className="px-5 py-4 text-left font-semibold text-slate-600 hidden md:table-cell">Lote</th>
+                      <th className="px-5 py-4 text-left font-semibold text-slate-600 hidden md:table-cell">Ruta OP</th>
                       <th className="px-5 py-4 text-left font-semibold text-slate-600">Cantidad</th>
                       <th className="px-5 py-4 text-left font-semibold text-slate-600 hidden lg:table-cell">Consumida</th>
                       <th className="px-5 py-4 text-left font-semibold text-slate-600">Estado</th>
@@ -660,6 +662,7 @@ export default function Orders() {
                           <td className="px-5 py-3 max-w-[220px] truncate text-slate-800 font-medium">{o.item}</td>
                           <td className="px-5 py-3 text-slate-500 hidden md:table-cell">{o.marca || '—'}</td>
                           <td className="px-5 py-3 text-slate-500 font-mono text-xs hidden md:table-cell">{o.lote || '—'}</td>
+                          <td className="px-5 py-3 text-slate-500 font-mono text-xs hidden md:table-cell">{o.ruta_op || '—'}</td>
                           <td className="px-5 py-3 text-slate-700 font-medium">
                             {o.cantidad?.toLocaleString()} <span className="text-xs text-slate-400">{o.und_medida}</span>
                           </td>
@@ -689,7 +692,7 @@ export default function Orders() {
                     })}
                     {filtradas.length === 0 && !isLoading && (
                       <tr>
-                        <td colSpan={8} className="p-12 text-center">
+                        <td colSpan={9} className="p-12 text-center">
                           <Package size={40} className="mx-auto text-slate-200 mb-3" />
                           <p className="text-slate-400 font-medium">Sin órdenes para mostrar.</p>
                           <p className="text-slate-300 text-sm mt-1">Prueba ajustando la búsqueda o los filtros.</p>

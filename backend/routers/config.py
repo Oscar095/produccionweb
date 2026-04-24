@@ -129,7 +129,7 @@ def list_estados_maquinas(db: Session = Depends(get_db), _=Depends(get_current_u
 
 @router.get("/rutas-siesa", response_model=List[RutaSiesaOut])
 def list_rutas_siesa(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    items = db.query(RutaSiesa).order_by(RutaSiesa.nombre_ruta).all()
+    items = db.query(RutaSiesa).order_by(RutaSiesa.orden, RutaSiesa.nombre_ruta).all()
     return items
 
 
@@ -143,7 +143,11 @@ def create_ruta_siesa(
     if existing:
         raise HTTPException(status_code=400, detail="Ya existe una ruta con ese nombre")
     try:
-        rs = RutaSiesa(nombre_ruta=body.nombre_ruta, descripcion=body.descripcion)
+        rs = RutaSiesa(
+            nombre_ruta=body.nombre_ruta,
+            descripcion=body.descripcion,
+            orden=body.orden or 0,
+        )
         db.add(rs)
         db.commit()
         db.refresh(rs)
@@ -174,6 +178,8 @@ def update_ruta_siesa(
         rs.nombre_ruta = body.nombre_ruta
     if body.descripcion is not None:
         rs.descripcion = body.descripcion
+    if body.orden is not None:
+        rs.orden = body.orden
     if body.activo is not None:
         rs.activo = body.activo
 

@@ -15,6 +15,7 @@ class RutaSiesa(Base):
     id          = Column(Integer, primary_key=True)
     nombre_ruta = Column(String(200), nullable=False)
     descripcion = Column(String(500))
+    orden       = Column(Integer, nullable=False, default=0, server_default="0")
     activo      = Column(Boolean, default=True)
     created_at  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 

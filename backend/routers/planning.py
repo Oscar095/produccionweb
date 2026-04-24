@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_roles
 from models.production import Maquina, OpNumero
-from models.planning import Asignacion, ParadaProgramada, Usuario, KanbanPrioridad
+from models.planning import Asignacion, ParadaProgramada, Usuario, KanbanPrioridad, RutaSiesa
 from schemas.planning import (
     AsignacionCreate, AsignacionUpdate, AsignacionOut,
     PrioridadBulkItem, SuspenderOrdenIn,
@@ -117,33 +117,47 @@ def get_kanban(
     """
     Tablero Kanban por ruta SIESA.
     Una columna por máquina con rutas_siesa_id; las OPs se asocian por
-    OpNumero.ruta_op == Maquina.rutas_siesa_id. Solo OPs activas y tipo_inv='IN1430K.ex'.
+    nombre: rutas_siesa.nombre_ruta == OpNumero.ruta_op. Solo OPs activas
+    y tipo_inv='IN1430K.ex'.
     Orden: prioridad manual ASC (KanbanPrioridad) luego OpNumero.created_at ASC.
+
+    Nota: op_numeros.ruta_op y maquinas.rutas_siesa son TEXT; la FK real es
+    maquinas.rutas_siesa_id -> planeacion.rutas_siesa.id. Hacemos el match
+    por nombre (con CAST para que SQL Server no falle "text vs varchar").
     """
     maquinas = (
         db.query(Maquina)
         .filter(Maquina.rutas_siesa_id.isnot(None))
-        .order_by(Maquina.nombre)
         .all()
     )
+    # dbo.maquinas.nombre es TEXT → SQL Server rechaza ORDER BY sobre TEXT.
+    # Ordenamos en Python para evitar castear en la query.
+    maquinas.sort(key=lambda m: (m.nombre or "").lower())
     if not maquinas:
         return {"columnas": []}
 
     ruta_ids = sorted({m.rutas_siesa_id for m in maquinas if m.rutas_siesa_id is not None})
+    rutas = db.query(RutaSiesa).filter(RutaSiesa.id.in_(ruta_ids)).all()
+    id_to_nombre = {r.id: r.nombre_ruta for r in rutas}
+    nombres = [n for n in id_to_nombre.values() if n]
 
-    ops = (
-        db.query(OpNumero)
-        .filter(
-            OpNumero.ruta_op.in_(ruta_ids),
-            cast(OpNumero.tipo_inv, String(50)) == "IN1430K.ex",
-            (OpNumero.cant_consumida.is_(None)) | (OpNumero.cant_consumida < OpNumero.cantidad),
+    if not nombres:
+        ops = []
+    else:
+        ops = (
+            db.query(OpNumero)
+            .filter(
+                cast(OpNumero.ruta_op, String(200)).in_(nombres),
+                cast(OpNumero.tipo_inv, String(50)) == "IN1430K.ex",
+                (OpNumero.cant_consumida.is_(None)) | (OpNumero.cant_consumida < OpNumero.cantidad),
+            )
+            .all()
         )
-        .all()
-    )
 
-    ops_by_ruta: dict[int, list[OpNumero]] = {}
+    ops_by_nombre: dict[str, list[OpNumero]] = {}
     for op in ops:
-        ops_by_ruta.setdefault(op.ruta_op, []).append(op)
+        key = str(op.ruta_op) if op.ruta_op is not None else ""
+        ops_by_nombre.setdefault(key, []).append(op)
 
     maq_ids = [m.Id for m in maquinas]
     op_doctos = [op.docto for op in ops]
@@ -161,7 +175,8 @@ def get_kanban(
 
     columnas = []
     for m in maquinas:
-        ops_maq = ops_by_ruta.get(m.rutas_siesa_id, [])
+        nombre_ruta = id_to_nombre.get(m.rutas_siesa_id)
+        ops_maq = ops_by_nombre.get(nombre_ruta, []) if nombre_ruta else []
 
         def _sort_key(op: OpNumero):
             prio = prio_map.get((m.Id, op.docto))

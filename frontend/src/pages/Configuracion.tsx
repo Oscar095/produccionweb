@@ -23,7 +23,7 @@ type Maquina = {
 }
 type CentroCostos = { id: number; centro: string }
 type EstadoMaquina = { id: number; estado_descripcion: string }
-type RutaSiesa = { id: number; nombre_ruta: string; descripcion: string | null; activo: boolean }
+type RutaSiesa = { id: number; nombre_ruta: string; descripcion: string | null; orden: number; activo: boolean }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const INPUT  = 'w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm'
@@ -313,8 +313,8 @@ function TabMaquinas() {
 }
 
 // ─── Form de ruta SIESA ───────────────────────────────────────────────────────
-type RutaForm = { nombre_ruta: string; descripcion: string; activo: boolean }
-const EMPTY_RUTA_FORM: RutaForm = { nombre_ruta: '', descripcion: '', activo: true }
+type RutaForm = { nombre_ruta: string; descripcion: string; orden: string; activo: boolean }
+const EMPTY_RUTA_FORM: RutaForm = { nombre_ruta: '', descripcion: '', orden: '0', activo: true }
 
 // ─── Tab: Rutas SIESA ─────────────────────────────────────────────────────────
 function TabRutasSiesa() {
@@ -343,7 +343,7 @@ function TabRutasSiesa() {
 
   const openEditar = (r: RutaSiesa) => {
     setSelected(r)
-    setForm({ nombre_ruta: r.nombre_ruta, descripcion: r.descripcion ?? '', activo: r.activo })
+    setForm({ nombre_ruta: r.nombre_ruta, descripcion: r.descripcion ?? '', orden: String(r.orden ?? 0), activo: r.activo })
     setModal('editar')
   }
 
@@ -389,6 +389,7 @@ function TabRutasSiesa() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100">
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Orden</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Nombre de Ruta</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Descripción</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Estado</th>
@@ -401,6 +402,11 @@ function TabRutasSiesa() {
                     key={r.id}
                     className={`border-b border-slate-100 transition-colors hover:bg-blue-50/40 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}`}
                   >
+                    <td className="px-4 py-3">
+                      <span className="inline-flex items-center justify-center min-w-[2rem] h-7 px-2 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold tabular-nums">
+                        {r.orden ?? 0}
+                      </span>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-lg bg-violet-100 flex items-center justify-center flex-shrink-0">
@@ -454,8 +460,21 @@ function TabRutasSiesa() {
               placeholder="Opcional"
             />
           </Field>
+          <Field label="Orden">
+            <input
+              type="number"
+              className={INPUT}
+              value={form.orden}
+              onChange={e => setForm(f => ({ ...f, orden: e.target.value }))}
+              placeholder="0"
+            />
+          </Field>
           <button
-            onClick={() => mutCreate.mutate({ nombre_ruta: form.nombre_ruta, descripcion: form.descripcion || null })}
+            onClick={() => mutCreate.mutate({
+              nombre_ruta: form.nombre_ruta,
+              descripcion: form.descripcion || null,
+              orden: Number(form.orden) || 0,
+            })}
             disabled={!form.nombre_ruta || mutCreate.isPending}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-xl px-5 py-2.5 shadow-sm transition-all"
           >
@@ -486,6 +505,15 @@ function TabRutasSiesa() {
               placeholder="Opcional"
             />
           </Field>
+          <Field label="Orden">
+            <input
+              type="number"
+              className={INPUT}
+              value={form.orden}
+              onChange={e => setForm(f => ({ ...f, orden: e.target.value }))}
+              placeholder="0"
+            />
+          </Field>
           <Field label="Estado">
             <select
               className={SELECT}
@@ -499,7 +527,12 @@ function TabRutasSiesa() {
           <button
             onClick={() => mutUpdate.mutate({
               id: selected.id,
-              data: { nombre_ruta: form.nombre_ruta || undefined, descripcion: form.descripcion || null, activo: form.activo },
+              data: {
+                nombre_ruta: form.nombre_ruta || undefined,
+                descripcion: form.descripcion || null,
+                orden: Number(form.orden) || 0,
+                activo: form.activo,
+              },
             })}
             disabled={!form.nombre_ruta || mutUpdate.isPending}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-xl px-5 py-2.5 shadow-sm transition-all"

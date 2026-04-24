@@ -228,17 +228,17 @@ export default function Planning() {
     },
   })
 
-  const handleDragEnd = (event: DragEndEvent, col: Columna) => {
+  const handleDragEnd = (event: DragEndEvent, maquina_id: number, ordenes: OrdenCard[]) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
 
-    const oldIdx = col.ordenes.findIndex(o => o.op_docto === active.id)
-    const newIdx = col.ordenes.findIndex(o => o.op_docto === over.id)
+    const oldIdx = ordenes.findIndex(o => o.op_docto === active.id)
+    const newIdx = ordenes.findIndex(o => o.op_docto === over.id)
     if (oldIdx < 0 || newIdx < 0) return
 
-    const nuevasOrdenes = arrayMove(col.ordenes, oldIdx, newIdx)
+    const nuevasOrdenes = arrayMove(ordenes, oldIdx, newIdx)
     const items = nuevasOrdenes.map((o, i) => ({ op_docto: o.op_docto, prioridad: i + 1 }))
-    mutPrioridades.mutate({ maquina_id: col.maquina_id, items })
+    mutPrioridades.mutate({ maquina_id, items })
   }
 
   return (
@@ -310,7 +310,7 @@ export default function Planning() {
       <div className="px-6 -mt-5 pb-10 max-w-full mx-auto space-y-6">
         {tab === 'timeline' && (
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            <DeliveryTimeline />
+            <DeliveryTimeline weekStart={semana} />
           </div>
         )}
 
@@ -325,13 +325,22 @@ export default function Planning() {
                 <p className="text-slate-300 text-sm mt-1">Asigna una ruta SIESA a las máquinas para ver sus órdenes.</p>
               </div>
             ) : (
-              <div className="flex gap-4 overflow-x-auto pb-4 -mx-6 px-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 {cols.map((col, colIdx) => {
                   const accent = COLUMN_ACCENTS[colIdx % COLUMN_ACCENTS.length]
+                  const ordenesVisibles = [...col.ordenes]
+                    .sort((a, b) => {
+                      const da = a.created_at ? new Date(a.created_at).getTime() : 0
+                      const db = b.created_at ? new Date(b.created_at).getTime() : 0
+                      return db - da
+                    })
+                    .slice(0, 10)
+                    .sort((a, b) => (a.prioridad ?? 9999) - (b.prioridad ?? 9999))
+                  const hayOcultas = col.ordenes.length > ordenesVisibles.length
                   return (
                     <div
                       key={col.maquina_id}
-                      className="shrink-0 w-80 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col"
+                      className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col min-w-0"
                     >
                       <div className={`h-1 ${accent.bar}`} />
 
@@ -349,15 +358,19 @@ export default function Planning() {
                               {col.rutas_siesa && <span className="ml-1">· {col.rutas_siesa}</span>}
                             </p>
                           </div>
-                          <span className="bg-slate-100 text-slate-600 rounded-full px-2 py-0.5 text-xs font-bold">
-                            {col.ordenes.length}
+                          <span
+                            className="bg-slate-100 text-slate-600 rounded-full px-2 py-0.5 text-xs font-bold"
+                            title={hayOcultas ? `Mostrando ${ordenesVisibles.length} de ${col.ordenes.length}` : undefined}
+                          >
+                            {ordenesVisibles.length}
+                            {hayOcultas && <span className="font-normal text-slate-400">/{col.ordenes.length}</span>}
                           </span>
                         </div>
 
-                        <DndContext collisionDetection={closestCenter} onDragEnd={e => handleDragEnd(e, col)}>
-                          <SortableContext items={col.ordenes.map(o => o.op_docto)} strategy={verticalListSortingStrategy}>
-                            <div className="space-y-2 flex-1 max-h-[640px] overflow-y-auto pr-1 -mr-1">
-                              {col.ordenes.map(o => (
+                        <DndContext collisionDetection={closestCenter} onDragEnd={e => handleDragEnd(e, col.maquina_id, ordenesVisibles)}>
+                          <SortableContext items={ordenesVisibles.map(o => o.op_docto)} strategy={verticalListSortingStrategy}>
+                            <div className="space-y-2 flex-1 max-h-[520px] overflow-y-auto pr-1 -mr-1">
+                              {ordenesVisibles.map(o => (
                                 <SortableCard
                                   key={o.op_docto}
                                   orden={o}
@@ -365,7 +378,7 @@ export default function Planning() {
                                   cerrando={cerrandoOp === o.op_docto}
                                 />
                               ))}
-                              {col.ordenes.length === 0 && (
+                              {ordenesVisibles.length === 0 && (
                                 <div className="border-2 border-dashed border-slate-200 rounded-xl p-6 text-center text-slate-400 text-xs">
                                   Sin órdenes asignadas
                                 </div>

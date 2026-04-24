@@ -1,9 +1,9 @@
 import { useState, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getTimeline } from '../api/planning'
-import { addDays, addWeeks, format, parseISO, startOfWeek } from 'date-fns'
+import { addDays, format, parseISO, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { AlertCircle, Clock, CheckCircle2, ChevronLeft, ChevronRight, CalendarCheck, Check } from 'lucide-react'
+import { AlertCircle, Clock, CheckCircle2, Check } from 'lucide-react'
 import Loading from './Loading'
 
 type TimelineOrder = {
@@ -202,9 +202,7 @@ function OrderChip({ order, showOriginal }: { order: TimelineOrder; showOriginal
   )
 }
 
-export default function DeliveryTimeline() {
-  const [weekOffset, setWeekOffset] = useState(0)
-
+export default function DeliveryTimeline({ weekStart }: { weekStart?: Date }) {
   const { data: orders = [], isLoading, error } = useQuery({
     queryKey: ['timeline'],
     queryFn: getTimeline,
@@ -217,10 +215,11 @@ export default function DeliveryTimeline() {
   const serverToday = allOrders.length > 0 ? allOrders[0].hoy : format(new Date(), 'yyyy-MM-dd')
   const todayDate = new Date(serverToday + 'T12:00:00') // noon to avoid TZ edge cases
 
-  // Compute the week to display
-  const referenceMonday = startOfWeek(addWeeks(todayDate, weekOffset), { weekStartsOn: 1 })
+  // Compute the week to display — use prop if provided, otherwise current week
+  const referenceMonday = weekStart ?? startOfWeek(todayDate, { weekStartsOn: 1 })
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(referenceMonday, i))
-  const isCurrentWeek = weekOffset === 0
+  const currentWeekMonday = startOfWeek(todayDate, { weekStartsOn: 1 })
+  const isCurrentWeek = format(referenceMonday, 'yyyy-MM-dd') === format(currentWeekMonday, 'yyyy-MM-dd')
 
   // Index orders by delivery_date
   const byDate = new Map<string, TimelineOrder[]>()
@@ -232,13 +231,11 @@ export default function DeliveryTimeline() {
   }
 
   // Orders due specifically this visible week (for stats)
-  const weekStart = format(weekDays[0], 'yyyy-MM-dd')
-  const weekEnd = format(weekDays[6], 'yyyy-MM-dd')
-  const weekOrders = allOrders.filter(o => !o.atrasada && o.delivery_date >= weekStart && o.delivery_date <= weekEnd)
+  const weekStartStr = format(weekDays[0], 'yyyy-MM-dd')
+  const weekEndStr = format(weekDays[6], 'yyyy-MM-dd')
+  const weekOrders = allOrders.filter(o => !o.atrasada && o.delivery_date >= weekStartStr && o.delivery_date <= weekEndStr)
   const overdueOrders = allOrders.filter(o => o.atrasada)
   const yellowThisWeek = weekOrders.filter(o => o.por_vencer)
-
-  const weekLabel = `${format(weekDays[0], "d 'de' MMM", { locale: es })} – ${format(weekDays[6], "d 'de' MMM yyyy", { locale: es })}`
 
   if (isLoading) return <Loading label="Cargando proyección de entregas..." />
 
@@ -246,44 +243,6 @@ export default function DeliveryTimeline() {
 
   return (
     <div>
-      {/* Navigation bar */}
-      <div className="flex items-center gap-3 mb-5">
-        <button
-          onClick={() => setWeekOffset(w => w - 1)}
-          className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
-          title="Semana anterior"
-        >
-          <ChevronLeft size={16} />
-        </button>
-
-        <div className="flex-1 text-center">
-          <span className="text-sm font-semibold text-gray-700">{weekLabel}</span>
-          {!isCurrentWeek && (
-            <span className="ml-2 text-xs text-gray-400">
-              {weekOffset > 0 ? `+${weekOffset} semana${weekOffset > 1 ? 's' : ''}` : `${weekOffset} semana${weekOffset < -1 ? 's' : ''}`}
-            </span>
-          )}
-        </div>
-
-        <button
-          onClick={() => setWeekOffset(w => w + 1)}
-          className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
-          title="Semana siguiente"
-        >
-          <ChevronRight size={16} />
-        </button>
-
-        {weekOffset !== 0 && (
-          <button
-            onClick={() => setWeekOffset(0)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-600 text-xs font-medium hover:bg-blue-100 transition"
-          >
-            <CalendarCheck size={13} />
-            Hoy
-          </button>
-        )}
-      </div>
-
       {/* Summary strip */}
       <div className="flex flex-wrap gap-2 mb-5">
         {overdueOrders.length > 0 && (

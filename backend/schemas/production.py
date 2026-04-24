@@ -33,6 +33,7 @@ class OpNumeroOut(BaseModel):
     und_medida: Optional[str] = None
     ext1: Optional[str] = None
     ext2: Optional[str] = None
+    ruta_op: Optional[str] = None
     created_at: Optional[datetime] = None
 
     @computed_field

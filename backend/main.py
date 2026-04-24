@@ -13,7 +13,10 @@ from database import engine, Base
 from models import *   # registra todos los modelos con Base
 
 # Importar modelos de planeacion para crear tablas si no existen
-from models.planning import Usuario, Asignacion, ParadaProgramada, ResumenSemanal, Rol, RolPermiso
+from models.planning import (
+    Usuario, Asignacion, ParadaProgramada, ResumenSemanal,
+    Rol, RolPermiso, RutaSiesa, KanbanPrioridad,
+)
 
 from routers import auth, gantt, production, maintenance, planning, reports, roles, config
 
@@ -57,13 +60,39 @@ def startup():
     Base.metadata.create_all(
         bind=engine,
         tables=[
+            RutaSiesa.__table__,
+            Rol.__table__,
+            RolPermiso.__table__,
             Usuario.__table__,
             Asignacion.__table__,
             ParadaProgramada.__table__,
             ResumenSemanal.__table__,
+            KanbanPrioridad.__table__,
         ],
         checkfirst=True,
     )
+
+    # Migraciones idempotentes de columnas agregadas a tablas existentes
+    try:
+        with engine.connect() as conn:
+            # 1. Agregar columna si no existe
+            conn.execute(text("""
+                IF NOT EXISTS (
+                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = 'planeacion'
+                      AND TABLE_NAME   = 'rutas_siesa'
+                      AND COLUMN_NAME  = 'orden'
+                )
+                BEGIN
+                    EXEC('ALTER TABLE planeacion.rutas_siesa ADD orden INT NULL');
+                END
+            """))
+            # 2. Rellenar NULLs con 0 (filas anteriores a la migración)
+            conn.execute(text("UPDATE planeacion.rutas_siesa SET orden = 0 WHERE orden IS NULL"))
+            conn.commit()
+            print("[startup] migración 'orden' en rutas_siesa OK")
+    except Exception as e:
+        print(f"[startup] ERROR migrando 'orden' en rutas_siesa: {e}")
 
 
 @app.get("/health", tags=["health"])
