@@ -95,6 +95,7 @@ class RegistroProduccionOut(BaseModel):
     maquina_nombre: Optional[str] = None
     numero_op: int
     item: Optional[str] = None
+    marca: Optional[str] = None
     operario: int
     operario_nombre: Optional[str] = None
     produccion: int

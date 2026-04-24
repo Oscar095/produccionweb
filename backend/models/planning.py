@@ -8,6 +8,19 @@ from sqlalchemy.orm import relationship
 from database import Base
 
 
+class RutaSiesa(Base):
+    __tablename__ = "rutas_siesa"
+    __table_args__ = {"schema": "planeacion"}
+
+    id          = Column(Integer, primary_key=True)
+    nombre_ruta = Column(String(200), nullable=False)
+    descripcion = Column(String(500))
+    activo      = Column(Boolean, default=True)
+    created_at  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    maquinas = relationship("Maquina", back_populates="ruta_siesa_obj")
+
+
 class Rol(Base):
     __tablename__ = "roles"
     __table_args__ = {"schema": "planeacion"}

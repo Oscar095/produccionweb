@@ -8,7 +8,7 @@ from schemas.roles import RolCreate, RolUpdate, RolOut, PermisoModuloOut
 
 router = APIRouter(prefix="/api/roles", tags=["roles"])
 
-MODULOS = ["dashboard", "ordenes", "gantt", "planeacion", "mantenimiento", "reportes", "usuarios"]
+MODULOS = ["dashboard", "ordenes", "gantt", "planeacion", "mantenimiento", "reportes", "usuarios", "configuracion"]
 
 
 def _build_permisos(rol: Rol) -> List[PermisoModuloOut]:

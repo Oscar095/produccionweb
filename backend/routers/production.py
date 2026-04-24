@@ -14,12 +14,22 @@ from schemas.production import (
 
 router = APIRouter(prefix="/api/production", tags=["production"])
 
+# tipo_inv del "producto real" dentro de los 3 componentes de una OP.
+# Los otros dos son productos en proceso (identificados por centro de costos).
+TIPO_INV_PRODUCTO_REAL = "1430K.ex"
+
 
 # ── helpers ─────────────────────────────────────────────────
 
 def _registro_to_out(r: RegistroProduccion, db: Session) -> RegistroProduccionOut:
     maq = db.query(Maquina).filter(Maquina.Id == r.maquina).first()
-    op  = db.query(OpNumero).filter(OpNumero.docto == r.numero_op).first()
+    # Preferir fila del producto real (tipo_inv='1430K.ex') entre los 3 componentes.
+    op = (
+        db.query(OpNumero)
+        .filter(OpNumero.docto == r.numero_op, OpNumero.tipo_inv.like(f'%{TIPO_INV_PRODUCTO_REAL}%'))
+        .first()
+        or db.query(OpNumero).filter(OpNumero.docto == r.numero_op).first()
+    )
     oper = db.query(PersonalPlanta).filter(PersonalPlanta.Id == r.operario).first()
     lider = db.query(PersonalPlanta).filter(PersonalPlanta.Id == r.lider_turno).first()
     return RegistroProduccionOut(
@@ -29,6 +39,7 @@ def _registro_to_out(r: RegistroProduccion, db: Session) -> RegistroProduccionOu
         maquina_nombre=maq.nombre if maq else None,
         numero_op=r.numero_op,
         item=op.item if op else None,
+        marca=op.marca if op else None,
         operario=r.operario,
         operario_nombre=oper.nombre_operario if oper else None,
         produccion=r.produccion,
@@ -50,27 +61,33 @@ def list_orders(
     page_size: int = Query(default=50, ge=1, le=2000),
     estado: Optional[str] = Query(default=None),
     buscar: Optional[str] = Query(default=None),
+    tipo_inv: Optional[str] = Query(
+        default=None,
+        description="Filtrar por tipo_inv (p.ej. '1430K.ex' para solo productos reales)",
+    ),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
     q = db.query(OpNumero)
+    if tipo_inv:
+        q = q.filter(OpNumero.tipo_inv.like(f'%{tipo_inv}%'))
     if buscar:
         like = f"%{buscar}%"
         q = q.filter(
             or_(
-                OpNumero.item.ilike(like),
-                OpNumero.marca.ilike(like),
-                OpNumero.ext1.ilike(like),         # referencia/color
-                OpNumero.ext2.ilike(like),         # máquina sugerida
-                OpNumero.lote.ilike(like),
-                OpNumero.cod_barras.ilike(like),
-                OpNumero.und_medida.ilike(like),
-                OpNumero.tipo_inv.ilike(like),
+                OpNumero.item.like(like),
+                OpNumero.marca.like(like),
+                OpNumero.ext1.like(like),
+                OpNumero.ext2.like(like),
+                OpNumero.lote.like(like),
+                OpNumero.cod_barras.like(like),
+                OpNumero.und_medida.like(like),
+                OpNumero.tipo_inv.like(like),
                 OpNumero.docto == (int(buscar) if buscar.isdigit() else -1),
             )
         )
     total = q.count()
-    ops = q.order_by(OpNumero.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    ops = q.order_by(OpNumero.docto.desc()).offset((page - 1) * page_size).limit(page_size).all()
     items = []
     for op in ops:
         out = OpNumeroOut.model_validate(op)
@@ -196,7 +213,19 @@ def list_registros(
     personal_ids = {r.operario for r in registros} | {r.lider_turno for r in registros}
 
     maquinas_map = {m.Id: m for m in db.query(Maquina).filter(Maquina.Id.in_(maquina_ids)).all()} if maquina_ids else {}
-    ops_map = {op.docto: op for op in db.query(OpNumero).filter(OpNumero.docto.in_(op_doctos)).all()} if op_doctos else {}
+
+    # Cada docto tiene 3 filas en op_numeros (los 3 componentes de la OP). Para item/marca
+    # usamos siempre la fila del producto real (tipo_inv='1430K.ex'); los otros dos son
+    # productos en proceso identificables por centro de costos.
+    ops_map: dict[int, OpNumero] = {}
+    if op_doctos:
+        for op in db.query(OpNumero).filter(OpNumero.docto.in_(op_doctos)).all():
+            existing = ops_map.get(op.docto)
+            is_real_product = op.tipo_inv and op.tipo_inv.lower() == TIPO_INV_PRODUCTO_REAL.lower()
+            existing_is_real = existing and existing.tipo_inv and existing.tipo_inv.lower() == TIPO_INV_PRODUCTO_REAL.lower()
+            if existing is None or (is_real_product and not existing_is_real):
+                ops_map[op.docto] = op
+
     personal_map = {p.Id: p for p in db.query(PersonalPlanta).filter(PersonalPlanta.Id.in_(personal_ids)).all()} if personal_ids else {}
 
     items = []
@@ -212,6 +241,7 @@ def list_registros(
             maquina_nombre=maq.nombre if maq else None,
             numero_op=r.numero_op,
             item=op.item if op else None,
+            marca=op.marca if op else None,
             operario=r.operario,
             operario_nombre=oper.nombre_operario if oper else None,
             produccion=r.produccion,

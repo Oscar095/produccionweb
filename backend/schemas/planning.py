@@ -33,6 +33,8 @@ class AsignacionOut(BaseModel):
     # datos de la orden
     item: Optional[str] = None
     marca: Optional[str] = None
+    calibre: Optional[str] = None
+    fecha_entrega: Optional[datetime] = None
     cantidad: Optional[int] = None
     cant_consumida: Optional[int] = None
     estado_op: Optional[str] = None

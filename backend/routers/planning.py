@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 import httpx
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import cast, String
+from sqlalchemy import cast, String, func
 from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_roles
@@ -48,6 +48,8 @@ def _asignacion_to_out(a: Asignacion, db: Session) -> AsignacionOut:
         motivo_suspension=a.motivo_suspension,
         item=op.item if op else None,
         marca=op.marca if op else None,
+        calibre=op.ext2 if op else None,
+        fecha_entrega=op.f851_fecha_terminacion if op else None,
         cantidad=cant,
         cant_consumida=consumida,
         estado_op=estado_op,
@@ -58,29 +60,35 @@ def _asignacion_to_out(a: Asignacion, db: Session) -> AsignacionOut:
 
 @router.get("/board")
 def get_board(
-    semana: Optional[datetime] = Query(default=None, description="Lunes de la semana (ISO)"),
     maquina_id: Optional[int] = None,
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Tablero de planeación: órdenes agrupadas por máquina, ordenadas por prioridad."""
-    if semana is None:
-        hoy = datetime.utcnow().date()
-        lunes = hoy - timedelta(days=hoy.weekday())
-        semana = datetime.combine(lunes, datetime.min.time())
-
-    semana_fin = semana + timedelta(days=6, hours=23, minutes=59)
-
-    q = db.query(Asignacion).filter(
-        Asignacion.fecha_inicio_plan <= semana_fin,
-        Asignacion.fecha_fin_plan   >= semana,
+    """Tablero Kanban por máquina. Agrupa las asignaciones activas por máquina,
+    ordenadas por prioridad (y OpNumero.created_at como tiebreaker)."""
+    # Subquery: one row per docto with its earliest created_at (op_numeros has
+    # multiple rows per docto — producto real + componentes).
+    op_created_sq = (
+        db.query(
+            OpNumero.docto.label("docto"),
+            func.min(OpNumero.created_at).label("created_at"),
+        )
+        .group_by(OpNumero.docto)
+        .subquery()
     )
+
+    q = db.query(Asignacion).outerjoin(
+        op_created_sq, op_created_sq.c.docto == Asignacion.op_docto
+    ).filter(Asignacion.suspendida == False)  # noqa: E712
     if maquina_id:
         q = q.filter(Asignacion.maquina_id == maquina_id)
 
-    asignaciones = q.order_by(Asignacion.maquina_id, Asignacion.prioridad).all()
+    asignaciones = q.order_by(
+        Asignacion.maquina_id,
+        Asignacion.prioridad,
+        op_created_sq.c.created_at.asc(),
+    ).all()
 
-    # Agrupar por máquina
     board: dict = {}
     for a in asignaciones:
         key = str(a.maquina_id)
@@ -92,9 +100,13 @@ def get_board(
                 "capacidad_hora": maq.capacidad_hora if maq else 0,
                 "ordenes": [],
             }
-        board[key]["ordenes"].append(_asignacion_to_out(a, db).model_dump())
+        out = _asignacion_to_out(a, db)
+        if out.estado_op == "Completado":
+            continue
+        board[key]["ordenes"].append(out.model_dump())
 
-    return {"semana_inicio": semana.isoformat(), "columnas": list(board.values())}
+    board = {k: v for k, v in board.items() if v["ordenes"]}
+    return {"columnas": list(board.values())}
 
 
 @router.get("/kanban")
@@ -231,7 +243,15 @@ def crear_asignacion(
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(require_roles("admin", "supervisor")),
 ):
-    a = Asignacion(**body.model_dump())
+    payload = body.model_dump()
+    # If client sent the schema default (100), push the new assignment to the
+    # end of the machine column so existing priorities aren't overwritten.
+    if payload.get("prioridad") == 100:
+        max_p = db.query(func.max(Asignacion.prioridad)).filter(
+            Asignacion.maquina_id == payload["maquina_id"]
+        ).scalar() or 0
+        payload["prioridad"] = max_p + 1
+    a = Asignacion(**payload)
     db.add(a)
     db.commit()
     db.refresh(a)
@@ -268,6 +288,35 @@ def bulk_prioridades(
             a.prioridad = item.prioridad
     db.commit()
     return {"ok": True, "actualizadas": len(items)}
+
+
+@router.post("/asignaciones/reordenar-por-fecha/{maquina_id}")
+def reordenar_por_fecha(
+    maquina_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles("admin", "supervisor")),
+):
+    """Reordena todas las asignaciones de una máquina por OpNumero.created_at ASC,
+    reescribiendo las prioridades 1, 2, 3, ..."""
+    op_created_sq = (
+        db.query(
+            OpNumero.docto.label("docto"),
+            func.min(OpNumero.created_at).label("created_at"),
+        )
+        .group_by(OpNumero.docto)
+        .subquery()
+    )
+    rows = (
+        db.query(Asignacion)
+          .outerjoin(op_created_sq, op_created_sq.c.docto == Asignacion.op_docto)
+          .filter(Asignacion.maquina_id == maquina_id)
+          .order_by(op_created_sq.c.created_at.asc(), Asignacion.created_at.asc())
+          .all()
+    )
+    for i, a in enumerate(rows, start=1):
+        a.prioridad = i
+    db.commit()
+    return {"ok": True, "actualizadas": len(rows)}
 
 
 @router.patch("/asignaciones/{asig_id}/suspender")
@@ -333,72 +382,73 @@ def get_timeline(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Proyección de entregas: OPs activas agrupadas por f851_fecha_terminacion."""
+    """Proyección de entregas: parte de dbo.op_numeros (OPs activas con f851_fecha_terminacion)
+    y superpone la asignación (máquina) cuando existe.
+    Solo muestra el producto real (tipo_inv='1430K.ex') de cada OP; los otros 2 son componentes en proceso."""
     hoy = datetime.utcnow().date()
-    hoy_str = hoy.isoformat()
 
-    # 1) OPs activas con fecha de terminación (un solo query, filtrado en BD)
-    ops = (
-        db.query(OpNumero)
-        .filter(
-            OpNumero.f851_fecha_terminacion.isnot(None),
-            (OpNumero.cant_consumida.is_(None)) | (OpNumero.cant_consumida < OpNumero.cantidad),
-            cast(OpNumero.tipo_inv, String(50)) == "IN1430K.ex",
-        )
-        .order_by(OpNumero.f851_fecha_terminacion)
+    all_ops = db.query(OpNumero).filter(OpNumero.f851_fecha_terminacion.isnot(None)).all()
+
+    # Para cada docto, preferir la fila con tipo_inv='1430K.ex' (producto real); fallback a cualquiera.
+    ops_by_docto: dict[int, OpNumero] = {}
+    for op in all_ops:
+        existing = ops_by_docto.get(op.docto)
+        is_real_product = op.tipo_inv and op.tipo_inv.lower() == "1430K.ex"
+        existing_is_real = existing and existing.tipo_inv and existing.tipo_inv.lower() == "1430K.ex"
+        if existing is None or (is_real_product and not existing_is_real):
+            ops_by_docto[op.docto] = op
+
+    ops = list(ops_by_docto.values())
+
+    # Overlay: asignación activa más reciente por OP para mostrar máquina
+    asigs = (
+        db.query(Asignacion)
+        .filter(Asignacion.suspendida == False)  # noqa: E712 — SQL Server: = 0, not IS 0
         .all()
     )
+    asig_map: dict[int, Asignacion] = {}
+    for a in asigs:
+        prev = asig_map.get(a.op_docto)
+        if not prev or (a.updated_at and prev.updated_at and a.updated_at > prev.updated_at):
+            asig_map[a.op_docto] = a
 
-    if not ops:
-        return []
+    maquinas = {m.Id: m for m in db.query(Maquina).all()}
 
-    # 2) Bulk: todas las asignaciones indexadas por op_docto
-    doctos = [op.docto for op in ops]
-    asigs = db.query(Asignacion).filter(Asignacion.op_docto.in_(doctos)).all()
-    asig_map = {a.op_docto: a for a in asigs}
-
-    # 3) Bulk: todas las máquinas necesarias
-    maq_ids = {a.maquina_id for a in asigs}
-    if maq_ids:
-        maquinas = db.query(Maquina).filter(Maquina.Id.in_(maq_ids)).all()
-        maq_map = {m.Id: m.nombre for m in maquinas}
-    else:
-        maq_map = {}
-
-    # 4) Armar resultado sin queries adicionales
     result = []
     for op in ops:
         cant = op.cantidad or 0
         consumida = op.cant_consumida or 0
-
-        estado_op = "En proceso" if consumida > 0 else "Pendiente"
+        if cant > 0 and consumida >= cant:
+            continue
+        fp = op.f851_fecha_terminacion
+        delivery = fp.date() if hasattr(fp, 'date') else fp
+        dias = (delivery - hoy).days
+        estado = "Pendiente" if consumida <= 0 else "En proceso"
         pct = round(min(consumida / cant * 100, 100), 1) if cant else 0.0
 
-        delivery_date = op.f851_fecha_terminacion.date()
-        dias_restantes = (delivery_date - hoy).days
-
-        asig = asig_map.get(op.docto)
-        maq_id = asig.maquina_id if asig else None
+        a = asig_map.get(op.docto)
+        maq = maquinas.get(a.maquina_id) if a else None
 
         result.append({
-            "asignacion_id": asig.id if asig else None,
+            "asignacion_id": a.id if a else None,
             "op_docto": op.docto,
             "item": op.item,
             "marca": op.marca,
-            "calibre": op.ext1,
-            "maquina_nombre": maq_map.get(maq_id) if maq_id else None,
-            "maquina_id": maq_id,
-            "delivery_date": delivery_date.isoformat(),
-            "hoy": hoy_str,
-            "dias_restantes": dias_restantes,
-            "estado_op": estado_op,
+            "calibre": op.ext2,
+            "maquina_nombre": maq.nombre if maq else None,
+            "maquina_id": a.maquina_id if a else None,
+            "delivery_date": delivery.isoformat(),
+            "hoy": hoy.isoformat(),
+            "dias_restantes": dias,
+            "estado_op": estado,
             "pct_completado": pct,
             "cantidad": cant,
             "cant_consumida": consumida,
-            "atrasada": dias_restantes < 0,
-            "por_vencer": 0 <= dias_restantes <= 5,
+            "atrasada": dias < 0,
+            "por_vencer": 0 <= dias <= 5,
         })
 
+    result.sort(key=lambda r: r["delivery_date"])
     return result
 
 
