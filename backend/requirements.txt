@@ -12,3 +12,5 @@ reportlab
 pandas
 python-dotenv
 httpx
+google-genai>=0.8.0
+sse-starlette>=2.1.0

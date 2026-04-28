@@ -1,168 +1,262 @@
 """
-Servicio Gantt: ensambla datos de órdenes asignadas + paradas de mantenimiento
-en el formato GanttDataOut.
+Servicio Gantt: proyección de carga por Centro de Trabajo (Ruta SIESA).
+
+Cada fila del Gantt representa una Ruta SIESA. La barra agregada se segmenta en:
+
+  • Atrasado  (rojo)  → unidades de OPs cuya fecha de entrega ya pasó.
+  • En riesgo (ámbar) → OPs cuya fecha de entrega es futura, pero cuyo fin
+                        proyectado (en cola FIFO por fecha de entrega) cae
+                        después de su entrega comprometida.
+  • A tiempo  (azul)  → OPs que se cumplen dentro de su fecha de entrega.
+
+La cola FIFO arranca HOY 00:00 (movido al lunes si cae en sáb/dom). Las
+horas operativas se acumulan saltando sábado y domingo.
 """
 from datetime import datetime
-from typing import List, Optional
-from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session, joinedload
+from typing import List, Optional, Dict
+from sqlalchemy import cast, String
+from sqlalchemy.orm import Session
 
-from models.production import Maquina, OpNumero, CentroCostos
-from models.maintenance import SolicitudMantenimiento
-from models.planning import Asignacion, ParadaProgramada
-from schemas.gantt import GanttDataOut, GanttRecurso, GanttTarea
-
-# Paleta de colores por estado
-COLORES = {
-    "En proceso":           "#3B82F6",   # azul
-    "Pendiente":            "#9CA3AF",   # gris
-    "Completado":           "#22C55E",   # verde
-    "Suspendida":           "#F59E0B",   # amarillo
-    "En Mantenimiento":     "#EF4444",   # rojo
-    "Parada Programada":    "#8B5CF6",   # violeta
-}
+from models.production import Maquina, OpNumero
+from models.planning import RutaSiesa
+from schemas.gantt import GanttDataOut, GanttRecurso, GanttTarea, GanttOpDetalle
+from services.working_hours import add_operative_hours, _next_business_start
 
 
-def _estado_op(cant: Optional[int], consumida: Optional[int]) -> str:
-    c = cant or 0
-    cons = consumida or 0
-    if cons <= 0:
-        return "Pendiente"
-    if cons >= c:
-        return "Completado"
-    return "En proceso"
+COLOR_ATRASADO = "#EF4444"   # rojo
+COLOR_RIESGO   = "#F59E0B"   # ámbar
+COLOR_A_TIEMPO = "#3B82F6"   # azul
+COLOR_VACIO    = "#9CA3AF"   # gris
 
 
-def _pct(cant: Optional[int], consumida: Optional[int]) -> float:
-    c = cant or 0
-    if c == 0:
-        return 0.0
-    return min((consumida or 0) / c, 1.0)
+def _dedupe_ops_por_docto(rows: List[OpNumero]) -> List[OpNumero]:
+    """Una fila por docto: prefiere tipo_inv = '1430K.ex' (producto real)."""
+    by_docto: Dict[int, OpNumero] = {}
+    for op in rows:
+        existing = by_docto.get(op.docto)
+        is_real = bool(op.tipo_inv and op.tipo_inv.lower() == "1430k.ex")
+        existing_is_real = bool(
+            existing and existing.tipo_inv and existing.tipo_inv.lower() == "1430k.ex"
+        )
+        if existing is None or (is_real and not existing_is_real):
+            by_docto[op.docto] = op
+    return list(by_docto.values())
 
 
 def get_gantt_data(
     db: Session,
     desde: datetime,
     hasta: datetime,
-    maquina_ids: Optional[List[int]] = None,
+    maquina_ids: Optional[List[int]] = None,   # ignorado en este modelo
 ) -> GanttDataOut:
-    # ── máquinas ──────────────────────────────────────────────
-    maq_q = db.query(Maquina).options(joinedload(Maquina.centro_costos))
-    if maquina_ids:
-        maq_q = maq_q.filter(Maquina.Id.in_(maquina_ids))
-    maquinas = maq_q.all()
-    maquina_map = {m.Id: m for m in maquinas}
+    rutas = (
+        db.query(RutaSiesa)
+        .filter(RutaSiesa.activo == True)  # noqa: E712
+        .order_by(RutaSiesa.orden.asc(), RutaSiesa.nombre_ruta.asc())
+        .all()
+    )
 
-    recursos = [
-        GanttRecurso(
-            id=m.Id,
-            nombre=m.nombre,
-            capacidad_hora=m.capacidad_hora,
-            centro=m.centro_costos.centro if m.centro_costos else None,
+    maquinas = (
+        db.query(Maquina)
+        .filter(Maquina.rutas_siesa_id.isnot(None))
+        .all()
+    )
+    maq_por_ruta: Dict[int, List[Maquina]] = {}
+    for m in maquinas:
+        maq_por_ruta.setdefault(m.rutas_siesa_id, []).append(m)
+
+    nombres_ruta = [r.nombre_ruta for r in rutas if r.nombre_ruta]
+    ops_rows: List[OpNumero] = []
+    if nombres_ruta:
+        ops_rows = (
+            db.query(OpNumero)
+            .filter(
+                cast(OpNumero.ruta_op, String(200)).in_(nombres_ruta),
+                OpNumero.estados == 1,
+            )
+            .all()
         )
-        for m in maquinas
-    ]
 
+    ops_por_ruta_raw: Dict[str, List[OpNumero]] = {}
+    for op in ops_rows:
+        key = (op.ruta_op or "").strip()
+        if not key:
+            continue
+        ops_por_ruta_raw.setdefault(key, []).append(op)
+
+    hoy = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    inicio_barra = _next_business_start(hoy)
+
+    recursos: List[GanttRecurso] = []
     tareas: List[GanttTarea] = []
 
-    # ── asignaciones (órdenes planificadas) ───────────────────
-    asig_q = (
-        db.query(Asignacion)
-        .filter(
-            Asignacion.fecha_inicio_plan <= hasta,
-            Asignacion.fecha_fin_plan   >= desde,
+    for r in rutas:
+        ms = maq_por_ruta.get(r.id, [])
+        cap_hora_total = sum((m.capacidad_hora or 0) for m in ms)
+        cap_diaria = cap_hora_total * 24
+
+        ops_dedup = _dedupe_ops_por_docto(ops_por_ruta_raw.get(r.nombre_ruta, []))
+
+        # Filtrar OPs con pendiente real
+        ops_pend = [
+            op for op in ops_dedup
+            if max((op.cantidad or 0) - (op.cant_consumida or 0), 0) > 0
+        ]
+
+        # Ordenar por fecha de entrega ASC (las atrasadas y más urgentes primero).
+        # Sin fecha → al final.
+        ops_pend.sort(key=lambda o: o.f851_fecha_terminacion or datetime.max)
+
+        # Recorrido FIFO: clasificar y proyectar fin de cada OP.
+        cursor = inicio_barra
+        op_detalles: List[GanttOpDetalle] = []
+        unidades_total = 0
+        unidades_consumidas = 0
+        unidades_pendientes = 0
+        unidades_atrasado = 0
+        unidades_riesgo = 0
+        unidades_a_tiempo = 0
+        num_ops_atrasado = 0
+        num_ops_riesgo = 0
+        num_ops_a_tiempo = 0
+        fecha_entrega_min: Optional[datetime] = None
+
+        for op in ops_pend:
+            cant = op.cantidad or 0
+            cons = op.cant_consumida or 0
+            pend = cant - cons
+            unidades_total += cant
+            unidades_consumidas += cons
+            unidades_pendientes += pend
+
+            if cap_hora_total > 0:
+                horas_op = pend / cap_hora_total
+                fin_op = add_operative_hours(cursor, horas_op)
+                dias_op = pend / cap_diaria if cap_diaria else 0.0
+            else:
+                horas_op = 0.0
+                fin_op = cursor
+                dias_op = 0.0
+
+            entrega = op.f851_fecha_terminacion
+            if entrega and entrega < hoy:
+                clase = "atrasada"
+                color = COLOR_ATRASADO
+                unidades_atrasado += pend
+                num_ops_atrasado += 1
+            elif entrega and fin_op > entrega:
+                clase = "en_riesgo"
+                color = COLOR_RIESGO
+                unidades_riesgo += pend
+                num_ops_riesgo += 1
+            else:
+                clase = "a_tiempo"
+                color = COLOR_A_TIEMPO
+                unidades_a_tiempo += pend
+                num_ops_a_tiempo += 1
+
+            if entrega and (fecha_entrega_min is None or entrega < fecha_entrega_min):
+                fecha_entrega_min = entrega
+
+            op_detalles.append(GanttOpDetalle(
+                docto=op.docto,
+                item=op.item,
+                marca=op.marca,
+                cantidad=cant,
+                cant_consumida=cons,
+                unidades_pendientes=pend,
+                fecha_entrega=entrega,
+                dias_estimados=round(dias_op, 2),
+                fecha_fin_proyectada=fin_op if cap_hora_total > 0 else None,
+                clase=clase,
+                color=color,
+            ))
+
+            cursor = fin_op  # avanza la cola
+
+        # Reordenar el detalle por severidad: atrasadas → riesgo → a tiempo,
+        # y dentro de cada grupo por fecha de entrega ASC.
+        prio_clase = {"atrasada": 0, "en_riesgo": 1, "a_tiempo": 2}
+        op_detalles.sort(key=lambda d: (
+            prio_clase.get(d.clase, 99),
+            d.fecha_entrega or datetime.max,
+        ))
+
+        num_ops = len(op_detalles)
+        horas_estimadas = (unidades_pendientes / cap_hora_total) if cap_hora_total else 0.0
+        dias_estimados = (unidades_pendientes / cap_diaria) if cap_diaria else 0.0
+
+        dias_atrasado = (unidades_atrasado / cap_diaria) if cap_diaria else 0.0
+        dias_riesgo   = (unidades_riesgo   / cap_diaria) if cap_diaria else 0.0
+        dias_a_tiempo = (unidades_a_tiempo / cap_diaria) if cap_diaria else 0.0
+
+        fin_barra = (
+            add_operative_hours(inicio_barra, horas_estimadas)
+            if horas_estimadas > 0
+            else inicio_barra
         )
-    )
-    if maquina_ids:
-        asig_q = asig_q.filter(Asignacion.maquina_id.in_(maquina_ids))
 
-    asignaciones = asig_q.all()
-    op_doctos = [a.op_docto for a in asignaciones]
+        sobrecargada = num_ops_atrasado > 0 or num_ops_riesgo > 0
 
-    # Cargar órdenes en batch
-    ops = {}
-    if op_doctos:
-        op_rows = db.query(OpNumero).filter(OpNumero.docto.in_(op_doctos)).all()
-        ops = {o.docto: o for o in op_rows}
+        # Estado agregado
+        if num_ops == 0 or unidades_pendientes <= 0 or cap_hora_total <= 0:
+            estado = "Sin carga"
+        elif num_ops_atrasado > 0:
+            estado = "Atrasado"
+        elif num_ops_riesgo > 0:
+            estado = "En riesgo"
+        else:
+            estado = "A tiempo"
 
-    for a in asignaciones:
-        op = ops.get(a.op_docto)
-        maq = maquina_map.get(a.maquina_id)
-        estado = "Suspendida" if a.suspendida else _estado_op(
-            op.cantidad if op else None,
-            op.cant_consumida if op else None,
-        )
-        horas = None
-        if op and maq and op.cantidad and maq.capacidad_hora:
-            horas = round(op.cantidad / maq.capacidad_hora, 2)
+        # Etiqueta de la barra
+        if num_ops == 0 or unidades_pendientes <= 0:
+            texto = f"{r.nombre_ruta} · sin OPs activas"
+        else:
+            unidades_fmt = (
+                f"{unidades_pendientes/1_000_000:.1f}M"
+                if unidades_pendientes >= 1_000_000
+                else f"{unidades_pendientes/1_000:.1f}K"
+                if unidades_pendientes >= 1_000
+                else str(unidades_pendientes)
+            )
+            texto = f"{num_ops} OPs · {unidades_fmt} u · {dias_estimados:.1f} días"
+
+        recursos.append(GanttRecurso(
+            id=r.id,
+            nombre=r.nombre_ruta,
+            orden=r.orden,
+            num_maquinas=len(ms),
+            capacidad_hora_total=cap_hora_total,
+            capacidad_diaria=cap_diaria,
+            num_ops=num_ops,
+            unidades_pendientes=unidades_pendientes,
+            dias_estimados=round(dias_estimados, 2),
+            sobrecargada=sobrecargada,
+            ops=op_detalles,
+        ))
 
         tareas.append(GanttTarea(
-            id=f"asig-{a.id}",
-            texto=f"OP {a.op_docto} — {op.item if op else '?'}",
-            inicio=a.fecha_inicio_plan,
-            fin=a.fecha_fin_plan,
-            progreso=_pct(op.cantidad if op else None, op.cant_consumida if op else None),
-            tipo="orden",
+            id=f"carga-{r.id}",
+            texto=texto,
+            inicio=inicio_barra,
+            fin=fin_barra,
+            tipo="carga",
             estado=estado,
-            maquina_id=a.maquina_id,
-            maquina_nombre=maq.nombre if maq else str(a.maquina_id),
-            op_docto=a.op_docto,
-            item=op.item if op else None,
-            marca=op.marca if op else None,
-            cantidad=op.cantidad if op else None,
-            cant_consumida=op.cant_consumida if op else None,
-            horas_estimadas=horas,
-            color=COLORES.get(estado),
-        ))
-
-    # ── tickets de mantenimiento (paradas correctivas) ────────
-    mant_q = db.query(SolicitudMantenimiento).filter(
-        SolicitudMantenimiento.fecha <= hasta,
-        or_(
-            SolicitudMantenimiento.fecha_solucion >= desde,
-            SolicitudMantenimiento.fecha_solucion.is_(None),   # aún abierto
-        ),
-    )
-    if maquina_ids:
-        mant_q = mant_q.filter(SolicitudMantenimiento.row_maquina.in_(maquina_ids))
-
-    for t in mant_q.all():
-        maq = maquina_map.get(t.row_maquina)
-        fin = t.fecha_solucion or hasta   # si sigue abierto, llega hasta el límite del rango
-        tareas.append(GanttTarea(
-            id=f"mant-{t.Id}",
-            texto=f"Mant. {t.ticket}",
-            inicio=t.fecha,
-            fin=fin,
-            progreso=1.0 if t.row_estado == 2 else 0.0,
-            tipo="mantenimiento",
-            estado="En Mantenimiento",
-            maquina_id=t.row_maquina,
-            maquina_nombre=maq.nombre if maq else str(t.row_maquina),
-            color=COLORES["En Mantenimiento"],
-        ))
-
-    # ── paradas programadas (preventivos) ─────────────────────
-    parad_q = db.query(ParadaProgramada).filter(
-        ParadaProgramada.inicio <= hasta,
-        ParadaProgramada.fin    >= desde,
-    )
-    if maquina_ids:
-        parad_q = parad_q.filter(ParadaProgramada.maquina_id.in_(maquina_ids))
-
-    for p in parad_q.all():
-        maq = maquina_map.get(p.maquina_id)
-        tareas.append(GanttTarea(
-            id=f"parada-{p.id}",
-            texto=f"Parada: {p.motivo}",
-            inicio=p.inicio,
-            fin=p.fin,
-            progreso=0.0,
-            tipo="parada_programada",
-            estado="Parada Programada",
-            maquina_id=p.maquina_id,
-            maquina_nombre=maq.nombre if maq else str(p.maquina_id),
-            color=COLORES["Parada Programada"],
+            ruta_id=r.id,
+            ruta_nombre=r.nombre_ruta,
+            num_ops=num_ops,
+            unidades_total=unidades_total,
+            unidades_pendientes=unidades_pendientes,
+            horas_estimadas=round(horas_estimadas, 2),
+            dias_estimados=round(dias_estimados, 2),
+            capacidad_diaria=cap_diaria,
+            dias_atrasado=round(dias_atrasado, 2),
+            dias_riesgo=round(dias_riesgo, 2),
+            dias_a_tiempo=round(dias_a_tiempo, 2),
+            num_ops_atrasado=num_ops_atrasado,
+            num_ops_riesgo=num_ops_riesgo,
+            num_ops_a_tiempo=num_ops_a_tiempo,
+            fecha_entrega_min=fecha_entrega_min,
         ))
 
     return GanttDataOut(recursos=recursos, tareas=tareas, desde=desde, hasta=hasta)

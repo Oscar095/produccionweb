@@ -4,7 +4,7 @@ import { useAuthStore } from '../store/auth'
 import {
   LayoutDashboard, GitBranch,
   Wrench, FileText, LogOut, Users, PackageSearch,
-  Menu, X, ChevronUp, ChevronDown, Settings,
+  Menu, X, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Settings, Bot,
 } from 'lucide-react'
 import PlanningLogo from './PlanningLogo'
 
@@ -15,6 +15,7 @@ const NAV = [
   { to: '/maintenance',    label: 'Mantenimiento',           Icon: Wrench,          modulo: 'mantenimiento' },
   { to: '/planning',       label: 'Planeación',              Icon: PlanningLogo,    modulo: 'planeacion' },
   { to: '/reports',        label: 'Reportes',                Icon: FileText,        modulo: 'reportes' },
+  { to: '/chat',           label: 'Koski IA',                Icon: Bot,             modulo: 'koski_ia' },
   { to: '/usuarios',       label: 'Usuarios',                Icon: Users,           modulo: 'usuarios' },
   { to: '/configuracion',  label: 'Configuración',           Icon: Settings,        modulo: 'configuracion' },
 ]
@@ -27,11 +28,20 @@ function getInitialBanner(): boolean {
   }
 }
 
+function getInitialSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem('kos-sidebar-collapsed') === '1'
+  } catch {
+    return false
+  }
+}
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
   const [bannerVisible, setBannerVisible] = useState<boolean>(getInitialBanner)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(getInitialSidebarCollapsed)
 
   const handleLogout = () => {
     logout()
@@ -43,6 +53,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       const next = !prev
       try {
         localStorage.setItem('kos-banner-visible', next ? '1' : '0')
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem('kos-sidebar-collapsed', next ? '1' : '0')
       } catch {
         // ignore
       }
@@ -118,10 +140,32 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Desktop sidebar — always visible on md+ */}
-      <div className="hidden md:flex shrink-0">
-        {sidebarContent}
-      </div>
+      {/* Desktop sidebar — always visible on md+ unless collapsed */}
+      {!sidebarCollapsed && (
+        <div className="hidden md:flex shrink-0 relative">
+          {sidebarContent}
+          <button
+            onClick={toggleSidebar}
+            className="hidden md:flex absolute top-3 -right-3 z-30 items-center justify-center w-6 h-6 rounded-full bg-blue-900 text-white border border-blue-700 hover:bg-blue-800 shadow transition"
+            aria-label="Ocultar panel lateral"
+            title="Ocultar panel lateral"
+          >
+            <ChevronLeft size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Floating expand button when collapsed (desktop only) */}
+      {sidebarCollapsed && (
+        <button
+          onClick={toggleSidebar}
+          className="hidden md:flex fixed top-3 left-3 z-30 items-center justify-center w-8 h-8 rounded-lg bg-blue-900 text-white hover:bg-blue-800 shadow-lg transition"
+          aria-label="Mostrar panel lateral"
+          title="Mostrar panel lateral"
+        >
+          <ChevronRight size={18} />
+        </button>
+      )}
 
       {/* Mobile overlay drawer */}
       {mobileOpen && (

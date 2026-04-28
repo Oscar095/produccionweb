@@ -1,10 +1,17 @@
-import { useState, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { getTimeline } from '../api/planning'
+import { useState, useRef, createContext, useContext } from 'react'
+import { createPortal } from 'react-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getTimeline, cerrarOP } from '../api/planning'
 import { addDays, format, parseISO, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { AlertCircle, Clock, CheckCircle2, Check } from 'lucide-react'
+import { AlertCircle, Clock, CheckCircle2, Loader2 } from 'lucide-react'
 import Loading from './Loading'
+
+type CerrarCtx = {
+  onCerrar: (op_docto: number) => void
+  cerrandoOp: number | null
+}
+const CerrarOPContext = createContext<CerrarCtx>({ onCerrar: () => {}, cerrandoOp: null })
 
 type TimelineOrder = {
   asignacion_id: number | null
@@ -33,40 +40,50 @@ function OrderPreview({
   onMouseEnter: () => void
   onMouseLeave: () => void
 }) {
+  const { onCerrar, cerrandoOp } = useContext(CerrarOPContext)
+  const cerrando = cerrandoOp === order.op_docto
   const fechaEntrega = order.delivery_date
     ? format(parseISO(order.delivery_date), "d MMM yyyy", { locale: es })
     : null
 
-  const handleCumplir = () => {
-    // TODO: wire up API call to close/fulfill the OP
-    console.log('Cumplir OP', order.op_docto)
-  }
-
-  return (
+  return createPortal(
     <div
-      className="fixed z-[9999] w-60 bg-white border border-gray-200 rounded-xl shadow-xl p-3 text-xs"
+      className="fixed z-[9999] w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-3 text-xs"
       style={{ top: pos.top, left: pos.left }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <div className="flex items-center justify-between mb-2">
-        <p className="font-bold text-gray-700">Detalle OP</p>
-        <button
-          onClick={handleCumplir}
-          title="Cumplir / cerrar OP"
-          className="flex items-center justify-center w-6 h-6 rounded-full bg-green-500 hover:bg-green-600 text-white transition shadow-sm"
-        >
-          <Check size={14} strokeWidth={3} />
-        </button>
-      </div>
+      <p className="font-bold text-slate-700 mb-2 uppercase tracking-wide text-[10px]">Detalle OP</p>
       <div className="space-y-1.5">
-        <div className="flex gap-1"><span className="text-gray-400 w-20 shrink-0">OP</span><span className="font-medium text-gray-800">{order.op_docto}</span></div>
-        <div className="flex gap-1"><span className="text-gray-400 w-20 shrink-0">Item</span><span className="font-medium text-gray-800 break-words">{order.item || '—'}</span></div>
-        <div className="flex gap-1"><span className="text-gray-400 w-20 shrink-0">Marca</span><span className="font-medium text-gray-800">{order.marca || '—'}</span></div>
-        <div className="flex gap-1"><span className="text-gray-400 w-20 shrink-0">Calibre</span><span className="font-medium text-gray-800">{order.calibre || '—'}</span></div>
-        <div className="flex gap-1"><span className="text-gray-400 w-20 shrink-0">Entrega</span><span className={`font-medium ${fechaEntrega ? 'text-gray-800' : 'text-gray-400'}`}>{fechaEntrega || '—'}</span></div>
+        <div className="flex gap-1"><span className="text-slate-400 w-20 shrink-0">OP</span><span className="font-medium text-slate-800">{order.op_docto}</span></div>
+        <div className="flex gap-1"><span className="text-slate-400 w-20 shrink-0">Item</span><span className="font-medium text-slate-800 break-words">{order.item || '—'}</span></div>
+        <div className="flex gap-1"><span className="text-slate-400 w-20 shrink-0">Marca</span><span className="font-medium text-slate-800">{order.marca || '—'}</span></div>
+        <div className="flex gap-1"><span className="text-slate-400 w-20 shrink-0">Calibre</span><span className="font-medium text-slate-800">{order.calibre || '—'}</span></div>
+        <div className="flex gap-1"><span className="text-slate-400 w-20 shrink-0">Entrega</span><span className={`font-medium ${fechaEntrega ? 'text-slate-800' : 'text-slate-400'}`}>{fechaEntrega || '—'}</span></div>
       </div>
-    </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onCerrar(order.op_docto)
+        }}
+        disabled={cerrando}
+        className="mt-3 w-full inline-flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 disabled:cursor-wait text-white rounded-lg py-2 text-[11px] font-semibold transition-colors"
+      >
+        {cerrando ? (
+          <>
+            <Loader2 size={13} className="animate-spin" />
+            Cerrando...
+          </>
+        ) : (
+          <>
+            <CheckCircle2 size={13} />
+            Dar por cumplido
+          </>
+        )}
+      </button>
+    </div>,
+    document.body
   )
 }
 
@@ -203,10 +220,28 @@ function OrderChip({ order, showOriginal }: { order: TimelineOrder; showOriginal
 }
 
 export default function DeliveryTimeline({ weekStart }: { weekStart?: Date }) {
+  const qc = useQueryClient()
   const { data: orders = [], isLoading, error } = useQuery({
     queryKey: ['timeline'],
     queryFn: getTimeline,
     refetchInterval: 60_000,
+  })
+
+  const [cerrandoOp, setCerrandoOp] = useState<number | null>(null)
+  const mutCerrar = useMutation({
+    mutationFn: (op_docto: number) => cerrarOP(op_docto),
+    onMutate: (op_docto) => { setCerrandoOp(op_docto) },
+    onSettled: () => { setCerrandoOp(null) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['timeline'] })
+      qc.invalidateQueries({ queryKey: ['kanban'] })
+      alert('OP dada por cumplida correctamente.')
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail
+      const msg = typeof detail === 'string' ? detail : JSON.stringify(detail ?? err?.message ?? 'Error desconocido')
+      alert(`No se pudo cerrar la OP:\n${msg}`)
+    },
   })
 
   const allOrders = orders as TimelineOrder[]
@@ -242,6 +277,7 @@ export default function DeliveryTimeline({ weekStart }: { weekStart?: Date }) {
   if (error) return <p className="text-red-400 text-sm py-6">Error cargando datos. Verifica que el servidor esté activo.</p>
 
   return (
+    <CerrarOPContext.Provider value={{ onCerrar: (op) => mutCerrar.mutate(op), cerrandoOp }}>
     <div>
       {/* Summary strip */}
       <div className="flex flex-wrap gap-2 mb-5">
@@ -365,5 +401,6 @@ export default function DeliveryTimeline({ weekStart }: { weekStart?: Date }) {
         </div>
       )}
     </div>
+    </CerrarOPContext.Provider>
   )
 }

@@ -83,7 +83,7 @@ def get_ticket(ticket_id: int, db: Session = Depends(get_db), _=Depends(get_curr
 def create_ticket(
     body: SolicitudMantenimientoCreate,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     data = body.model_dump()
     data.pop("ticket", None)
@@ -102,7 +102,7 @@ def update_ticket(
     ticket_id: int,
     body: SolicitudMantenimientoUpdate,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     t = db.query(SolicitudMantenimiento).filter(SolicitudMantenimiento.Id == ticket_id).first()
     if not t:
@@ -127,7 +127,7 @@ def create_bitacora(
     ticket_id: int,
     body: BitacoraCreate,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     t = db.query(SolicitudMantenimiento).filter(SolicitudMantenimiento.Id == ticket_id).first()
     if not t:

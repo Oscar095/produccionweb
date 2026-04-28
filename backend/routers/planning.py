@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import cast, String, func
 from sqlalchemy.orm import Session
 from database import get_db
-from auth import get_current_user, require_roles
+from auth import get_current_user, require_roles, require_permiso
 from models.production import Maquina, OpNumero
 from models.planning import Asignacion, ParadaProgramada, Usuario, KanbanPrioridad, RutaSiesa
 from schemas.planning import (
@@ -17,8 +17,32 @@ from schemas.planning import (
     KanbanColumnaOut, KanbanOrdenOut, KanbanBulkPrioridadIn,
 )
 from services.planning_engine import get_capacidad_semana, get_feasibility
+from services.working_hours import add_operative_hours
 
 router = APIRouter(prefix="/api/planning", tags=["planning"])
+
+
+def _calc_fecha_fin_plan(
+    db: Session,
+    op_docto: int,
+    maquina_id: int,
+    fecha_inicio_plan: datetime,
+) -> datetime:
+    """
+    Calcula fecha_fin_plan a partir de la cantidad pendiente de la OP y la
+    capacidad_hora de la máquina, sumando horas operativas (Lun-Vie 24h, sin
+    sábados ni domingos). Si no hay datos suficientes para calcular, devuelve
+    la misma fecha_inicio_plan (el caller debe decidir el fallback).
+    """
+    op = db.query(OpNumero).filter(OpNumero.docto == op_docto).first()
+    maq = db.query(Maquina).filter(Maquina.Id == maquina_id).first()
+    if not op or not maq or not maq.capacidad_hora:
+        return fecha_inicio_plan
+    pendiente = max((op.cantidad or 0) - (op.cant_consumida or 0), 0)
+    if pendiente <= 0:
+        return fecha_inicio_plan
+    horas = pendiente / maq.capacidad_hora
+    return add_operative_hours(fecha_inicio_plan, horas)
 
 
 def _asignacion_to_out(a: Asignacion, db: Session) -> AsignacionOut:
@@ -148,8 +172,7 @@ def get_kanban(
             db.query(OpNumero)
             .filter(
                 cast(OpNumero.ruta_op, String(200)).in_(nombres),
-                cast(OpNumero.tipo_inv, String(50)) == "IN1430K.ex",
-                (OpNumero.cant_consumida.is_(None)) | (OpNumero.cant_consumida < OpNumero.cantidad),
+                OpNumero.estados == 1,
             )
             .all()
         )
@@ -180,11 +203,11 @@ def get_kanban(
 
         def _sort_key(op: OpNumero):
             prio = prio_map.get((m.Id, op.docto))
-            # Prioridad manual primero (si existe), luego por created_at ASC
+            # Prioridad manual primero (si existe), luego por fecha de terminación ASC
             return (
                 0 if prio is not None else 1,
                 prio if prio is not None else 0,
-                op.created_at or datetime.max,
+                op.f851_fecha_terminacion or datetime.max,
             )
 
         ops_maq_sorted = sorted(ops_maq, key=_sort_key)
@@ -222,11 +245,28 @@ def get_kanban(
     return {"columnas": columnas}
 
 
+@router.delete("/kanban/prioridades/{maquina_id}")
+def reset_kanban_prioridades(
+    maquina_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles("Administrador", "Supervisor")),
+):
+    """Elimina todas las prioridades manuales de una máquina, volviendo al
+    orden default (por fecha de terminación ASC)."""
+    eliminadas = (
+        db.query(KanbanPrioridad)
+        .filter(KanbanPrioridad.maquina_id == maquina_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"ok": True, "eliminadas": eliminadas}
+
+
 @router.patch("/kanban/prioridades")
 def bulk_kanban_prioridades(
     body: KanbanBulkPrioridadIn,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     """Upsert bulk de prioridades manuales del Kanban por máquina."""
     actualizadas = 0
@@ -256,7 +296,7 @@ def bulk_kanban_prioridades(
 def crear_asignacion(
     body: AsignacionCreate,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(require_roles("admin", "supervisor")),
+    current_user: Usuario = Depends(require_roles("Administrador", "Supervisor")),
 ):
     payload = body.model_dump()
     # If client sent the schema default (100), push the new assignment to the
@@ -266,6 +306,14 @@ def crear_asignacion(
             Asignacion.maquina_id == payload["maquina_id"]
         ).scalar() or 0
         payload["prioridad"] = max_p + 1
+    # Recalcular fecha_fin_plan según capacidad de la máquina y unidades
+    # pendientes de la OP, contando solo horas Lun-Vie.
+    payload["fecha_fin_plan"] = _calc_fecha_fin_plan(
+        db,
+        op_docto=payload["op_docto"],
+        maquina_id=payload["maquina_id"],
+        fecha_inicio_plan=payload["fecha_inicio_plan"],
+    )
     a = Asignacion(**payload)
     db.add(a)
     db.commit()
@@ -278,13 +326,23 @@ def update_asignacion(
     asig_id: int,
     body: AsignacionUpdate,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     a = db.query(Asignacion).filter(Asignacion.id == asig_id).first()
     if not a:
         raise HTTPException(status_code=404, detail="Asignación no encontrada")
-    for k, v in body.model_dump(exclude_none=True).items():
+    changes = body.model_dump(exclude_none=True)
+    for k, v in changes.items():
         setattr(a, k, v)
+    # Si cambió maquina_id o fecha_inicio_plan, recalcular fecha_fin_plan
+    # automáticamente (ignorando cualquier fecha_fin_plan enviada por el cliente).
+    if "maquina_id" in changes or "fecha_inicio_plan" in changes:
+        a.fecha_fin_plan = _calc_fecha_fin_plan(
+            db,
+            op_docto=a.op_docto,
+            maquina_id=a.maquina_id,
+            fecha_inicio_plan=a.fecha_inicio_plan,
+        )
     db.commit()
     db.refresh(a)
     return _asignacion_to_out(a, db)
@@ -294,7 +352,7 @@ def update_asignacion(
 def bulk_prioridades(
     items: List[PrioridadBulkItem],
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     """Actualiza prioridades en bulk (resultado de drag & drop)."""
     for item in items:
@@ -309,7 +367,7 @@ def bulk_prioridades(
 def reordenar_por_fecha(
     maquina_id: int,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     """Reordena todas las asignaciones de una máquina por OpNumero.created_at ASC,
     reescribiendo las prioridades 1, 2, 3, ..."""
@@ -339,7 +397,7 @@ def suspender_orden(
     asig_id: int,
     body: SuspenderOrdenIn,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     a = db.query(Asignacion).filter(Asignacion.id == asig_id).first()
     if not a:
@@ -354,7 +412,7 @@ def suspender_orden(
 def reactivar_orden(
     asig_id: int,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     a = db.query(Asignacion).filter(Asignacion.id == asig_id).first()
     if not a:
@@ -485,7 +543,7 @@ def list_paradas(db: Session = Depends(get_db), _=Depends(get_current_user)):
 def create_parada(
     body: ParadaProgramadaCreate,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(require_roles("admin", "supervisor")),
+    current_user: Usuario = Depends(require_roles("Administrador", "Supervisor")),
 ):
     p = ParadaProgramada(**body.model_dump(), created_by=current_user.id)
     db.add(p)
@@ -502,25 +560,26 @@ def create_parada(
 @router.post("/cerrar-op/{op_docto}")
 def cerrar_op(
     op_docto: int,
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_permiso("cerrar_op", "puede_ver")),
 ):
     """Llama al API externo de Siesa para dar por cumplida una OP."""
     url = os.getenv("API_CERRAR_OPS", "").strip()
-    conni_key = os.getenv("CONNI_KEY", "").strip()
-    conni_token = os.getenv("CONNI_TOKEN", "").strip()
+    # Acepta ambas variantes (ConniKey/ConniToken como están en .env, o las legacy CONNI_KEY/CONNI_TOKEN)
+    conni_key = (os.getenv("ConniKey") or os.getenv("CONNI_KEY") or "").strip()
+    conni_token = (os.getenv("ConniToken") or os.getenv("CONNI_TOKEN") or "").strip()
 
     if not url or not conni_key or not conni_token:
         raise HTTPException(
             status_code=500,
-            detail="API_CERRAR_OPS, CONNI_KEY o CONNI_TOKEN no configurados en .env",
+            detail="API_CERRAR_OPS, ConniKey o ConniToken no configurados en .env",
         )
 
     headers = {
-        "CONNI-KEY": conni_key,
-        "CONNI-TOKEN": conni_token,
+        "ConniKey": conni_key,
+        "ConniToken": conni_token,
         "Content-Type": "application/json",
     }
-    body = {"Documentos": [{"f850_consec_docto": op_docto}]}
+    body = {"Documentos": [{"f850_consec_docto": str(op_docto)}]}
 
     try:
         with httpx.Client(timeout=60.0) as client:
@@ -546,7 +605,7 @@ def cerrar_op(
 def delete_parada(
     parada_id: int,
     db: Session = Depends(get_db),
-    _=Depends(require_roles("admin", "supervisor")),
+    _=Depends(require_roles("Administrador", "Supervisor")),
 ):
     p = db.query(ParadaProgramada).filter(ParadaProgramada.id == parada_id).first()
     if not p:

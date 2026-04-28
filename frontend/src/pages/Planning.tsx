@@ -4,13 +4,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { getKanban, bulkKanbanPrioridades, cerrarOP } from '../api/planning'
+import { getKanban, bulkKanbanPrioridades, cerrarOP, resetKanbanPrioridades } from '../api/planning'
 import { format, startOfWeek, addWeeks, subWeeks, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
   GripVertical, LayoutGrid, CalendarDays,
   Layers, Factory, Package, Clock, Inbox,
-  ChevronLeft, ChevronRight, CheckCircle2, Loader2,
+  ChevronLeft, ChevronRight, CheckCircle2, Loader2, RotateCcw,
 } from 'lucide-react'
 import DeliveryTimeline from '../components/DeliveryTimeline'
 import Loading from '../components/Loading'
@@ -209,7 +209,61 @@ export default function Planning() {
   const mutPrioridades = useMutation({
     mutationFn: ({ maquina_id, items }: { maquina_id: number; items: Array<{ op_docto: number; prioridad: number }> }) =>
       bulkKanbanPrioridades(maquina_id, items),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['kanban'] }),
+    // Optimistic update: aplicar las prioridades nuevas en el cache antes de
+    // que el servidor confirme, para que la card no "salte de regreso" entre
+    // el drop y el refetch.
+    onMutate: async ({ maquina_id, items }) => {
+      await qc.cancelQueries({ queryKey: ['kanban'] })
+      const previous = qc.getQueryData<{ columnas: Columna[] }>(['kanban'])
+      const prioMap = new Map(items.map(i => [i.op_docto, i.prioridad]))
+      qc.setQueryData<{ columnas: Columna[] } | undefined>(['kanban'], (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          columnas: old.columnas.map(c =>
+            c.maquina_id === maquina_id
+              ? {
+                  ...c,
+                  ordenes: c.ordenes.map(o =>
+                    prioMap.has(o.op_docto)
+                      ? { ...o, prioridad: prioMap.get(o.op_docto)! }
+                      : o
+                  ),
+                }
+              : c
+          ),
+        }
+      })
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(['kanban'], context.previous)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['kanban'] }),
+  })
+
+  const mutResetPrioridades = useMutation({
+    mutationFn: (maquina_id: number) => resetKanbanPrioridades(maquina_id),
+    onMutate: async (maquina_id) => {
+      await qc.cancelQueries({ queryKey: ['kanban'] })
+      const previous = qc.getQueryData<{ columnas: Columna[] }>(['kanban'])
+      qc.setQueryData<{ columnas: Columna[] } | undefined>(['kanban'], (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          columnas: old.columnas.map(c =>
+            c.maquina_id === maquina_id
+              ? { ...c, ordenes: c.ordenes.map(o => ({ ...o, prioridad: null })) }
+              : c
+          ),
+        }
+      })
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(['kanban'], context.previous)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['kanban'] }),
   })
 
   const [cerrandoOp, setCerrandoOp] = useState<number | null>(null)
@@ -328,15 +382,19 @@ export default function Planning() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 {cols.map((col, colIdx) => {
                   const accent = COLUMN_ACCENTS[colIdx % COLUMN_ACCENTS.length]
-                  const ordenesVisibles = [...col.ordenes]
-                    .sort((a, b) => {
-                      const da = a.created_at ? new Date(a.created_at).getTime() : 0
-                      const db = b.created_at ? new Date(b.created_at).getTime() : 0
-                      return db - da
-                    })
-                    .slice(0, 10)
-                    .sort((a, b) => (a.prioridad ?? 9999) - (b.prioridad ?? 9999))
-                  const hayOcultas = col.ordenes.length > ordenesVisibles.length
+                  // Orden default: fecha de terminación más cercana primero (ASC).
+                  // Las OPs con prioridad manual (drag & drop) van primero en
+                  // orden ascendente. Empates → tiebreaker por fecha de entrega.
+                  const ordenesVisibles = [...col.ordenes].sort((a, b) => {
+                    const pa = a.prioridad ?? 9999
+                    const pb = b.prioridad ?? 9999
+                    if (pa !== pb) return pa - pb
+                    const da = a.fecha_entrega ? new Date(a.fecha_entrega).getTime() : Number.POSITIVE_INFINITY
+                    const db = b.fecha_entrega ? new Date(b.fecha_entrega).getTime() : Number.POSITIVE_INFINITY
+                    return da - db
+                  })
+                  const tienePrioridadManual = col.ordenes.some(o => o.prioridad != null)
+                  const reseteandoEsta = mutResetPrioridades.isPending && mutResetPrioridades.variables === col.maquina_id
                   return (
                     <div
                       key={col.maquina_id}
@@ -358,13 +416,27 @@ export default function Planning() {
                               {col.rutas_siesa && <span className="ml-1">· {col.rutas_siesa}</span>}
                             </p>
                           </div>
-                          <span
-                            className="bg-slate-100 text-slate-600 rounded-full px-2 py-0.5 text-xs font-bold"
-                            title={hayOcultas ? `Mostrando ${ordenesVisibles.length} de ${col.ordenes.length}` : undefined}
-                          >
+                          <span className="bg-slate-100 text-slate-600 rounded-full px-2 py-0.5 text-xs font-bold">
                             {ordenesVisibles.length}
-                            {hayOcultas && <span className="font-normal text-slate-400">/{col.ordenes.length}</span>}
                           </span>
+                          {tienePrioridadManual && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (reseteandoEsta) return
+                                if (confirm(`¿Restaurar el orden por defecto de "${col.maquina_nombre}"?\nSe perderán las prioridades manuales.`)) {
+                                  mutResetPrioridades.mutate(col.maquina_id)
+                                }
+                              }}
+                              disabled={reseteandoEsta}
+                              title="Restaurar orden por defecto (fecha de entrega)"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {reseteandoEsta
+                                ? <Loader2 size={14} className="animate-spin" />
+                                : <RotateCcw size={14} />}
+                            </button>
+                          )}
                         </div>
 
                         <DndContext collisionDetection={closestCenter} onDragEnd={e => handleDragEnd(e, col.maquina_id, ordenesVisibles)}>

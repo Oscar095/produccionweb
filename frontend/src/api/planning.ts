@@ -26,6 +26,9 @@ export const bulkKanbanPrioridades = (
   items: Array<{ op_docto: number; prioridad: number }>,
 ) => api.patch('/api/planning/kanban/prioridades', { maquina_id, items }).then(r => r.data)
 
+export const resetKanbanPrioridades = (maquina_id: number) =>
+  api.delete(`/api/planning/kanban/prioridades/${maquina_id}`).then(r => r.data)
+
 export const suspenderOrden = (id: number, motivo: string) =>
   api.patch(`/api/planning/asignaciones/${id}/suspender`, { motivo }).then(r => r.data)
 

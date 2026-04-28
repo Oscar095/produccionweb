@@ -44,7 +44,7 @@ def get_weekly_data(
 def generate_weekly_pdf(
     semana: Optional[datetime] = Query(default=None),
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(require_roles("admin", "supervisor")),
+    current_user: Usuario = Depends(require_roles("Administrador", "Supervisor")),
 ):
     if semana is None:
         hoy = datetime.utcnow().date()

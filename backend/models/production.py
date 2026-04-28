@@ -70,6 +70,7 @@ class OpNumero(Base):
     cod_barras    = Column(String(50))
     cant_consumida = Column(Integer)                   # qty producida hasta ahora
     f851_fecha_terminacion = Column(DateTime)          # fecha comprometida de entrega
+    estados       = Column(Integer)                    # 1=activa, 3=cerrada/cumplida
     ruta_op       = Column(Text)                       # ruta de producción asociada
 
     # No relationship to Asignacion — se consulta via Asignacion.op_docto == docto

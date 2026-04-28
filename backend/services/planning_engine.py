@@ -1,7 +1,7 @@
 """
 Motor de planeación y cálculo de capacidad.
 Dado un centro de trabajo y una semana, determina:
-  - Horas disponibles (turno 8h × días laborables - paradas)
+  - Horas disponibles (planta opera 24h Lun-Vie - paradas)
   - Horas requeridas por órdenes asignadas
   - Qué órdenes son alcanzables
 """
@@ -15,8 +15,8 @@ from models.maintenance import SolicitudMantenimiento
 from models.planning import Asignacion, ParadaProgramada
 from schemas.planning import CapacidadMaquinaOut
 
-HORAS_TURNO = 8.0          # horas productivas por día
-DIAS_SEMANA_LABORABLES = 5  # lunes a viernes
+HORAS_TURNO = 24.0          # planta operativa 24h/día Lun-Vie
+DIAS_SEMANA_LABORABLES = 5  # lunes a viernes (sáb/dom no producen)
 
 
 def _horas_paradas_en_rango(

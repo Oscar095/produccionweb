@@ -18,7 +18,7 @@ from models.planning import (
     Rol, RolPermiso, RutaSiesa, KanbanPrioridad,
 )
 
-from routers import auth, gantt, production, maintenance, planning, reports, roles, config
+from routers import auth, gantt, production, maintenance, planning, reports, roles, config, koski_ia
 
 app = FastAPI(
     title="KOS Xpress — Planeación de Producción",
@@ -46,6 +46,7 @@ app.include_router(planning.router)
 app.include_router(reports.router)
 app.include_router(roles.router)
 app.include_router(config.router)
+app.include_router(koski_ia.router)
 
 
 @app.on_event("startup")
@@ -93,6 +94,55 @@ def startup():
             print("[startup] migración 'orden' en rutas_siesa OK")
     except Exception as e:
         print(f"[startup] ERROR migrando 'orden' en rutas_siesa: {e}")
+
+    # Seed idempotente: garantiza que cada rol tenga al menos puede_ver=True para
+    # módulos nuevos (koski_ia). No sobreescribe permisos ya configurados.
+    try:
+        from database import SessionLocal
+        with SessionLocal() as session:
+            roles_existentes = session.query(Rol).all()
+            modulos_a_sembrar = ["koski_ia"]
+            creados = 0
+            for rol in roles_existentes:
+                modulos_actuales = {p.modulo for p in rol.permisos}
+                for modulo in modulos_a_sembrar:
+                    if modulo not in modulos_actuales:
+                        session.add(RolPermiso(
+                            rol_id=rol.id,
+                            modulo=modulo,
+                            puede_ver=True,
+                            puede_crear=False,
+                            puede_editar=False,
+                            puede_eliminar=False,
+                        ))
+                        creados += 1
+            if creados:
+                session.commit()
+                print(f"[startup] seed permisos koski_ia: {creados} fila(s) creada(s)")
+    except Exception as e:
+        print(f"[startup] ERROR sembrando permisos koski_ia: {e}")
+
+    # Seed idempotente del permiso cerrar_op SOLO para el rol Administrador.
+    # Los demás roles deben configurarlo manualmente desde la UI de Roles.
+    try:
+        from database import SessionLocal
+        with SessionLocal() as session:
+            admin = session.query(Rol).filter(Rol.nombre == "Administrador").first()
+            if admin:
+                modulos_admin = {p.modulo for p in admin.permisos}
+                if "cerrar_op" not in modulos_admin:
+                    session.add(RolPermiso(
+                        rol_id=admin.id,
+                        modulo="cerrar_op",
+                        puede_ver=True,
+                        puede_crear=True,
+                        puede_editar=True,
+                        puede_eliminar=True,
+                    ))
+                    session.commit()
+                    print("[startup] seed permiso cerrar_op para Administrador OK")
+    except Exception as e:
+        print(f"[startup] ERROR sembrando permiso cerrar_op: {e}")
 
 
 @app.get("/health", tags=["health"])

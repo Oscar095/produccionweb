@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**KOS Xpress** — MES (Manufacturing Execution System) that replaces AppSheet for industrial production planning. Connects to an existing Azure SQL Server database (`kos_apps`) without modifying its `dbo.*` tables. Only writes to the `planeacion.*` schema.
+**KOS Colombia** — MES (Manufacturing Execution System) that replaces AppSheet for industrial production planning. Connects to an existing Azure SQL Server database (`kos_apps`) without modifying its `dbo.*` tables. Only writes to the `planeacion.*` schema.
 
 ## Commands
 

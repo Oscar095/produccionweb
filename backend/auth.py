@@ -82,3 +82,35 @@ def require_roles(*roles: str):
             )
         return current_user
     return checker
+
+
+def require_permiso(modulo: str, accion: str = "puede_ver"):
+    """Dependency factory para requerir un permiso granular del rol del usuario.
+    'Administrador' siempre tiene acceso. Para los demás se consulta planeacion.rol_permisos.
+    """
+    from models.planning import RolPermiso  # import local para evitar ciclos
+
+    def checker(
+        current_user: Usuario = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> Usuario:
+        if current_user.rol == "Administrador":
+            return current_user
+        if not current_user.rol_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Sin permiso para '{modulo}': el usuario no tiene rol asignado",
+            )
+        permiso = (
+            db.query(RolPermiso)
+            .filter(RolPermiso.rol_id == current_user.rol_id, RolPermiso.modulo == modulo)
+            .first()
+        )
+        if not permiso or not getattr(permiso, accion, False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Sin permiso '{accion}' para el módulo '{modulo}'",
+            )
+        return current_user
+
+    return checker

@@ -24,6 +24,7 @@ const MODULOS: { clave: string; label: string }[] = [
   { clave: 'reportes',       label: 'Reportes' },
   { clave: 'usuarios',       label: 'Usuarios' },
   { clave: 'configuracion',  label: 'Configuración' },
+  { clave: 'cerrar_op',      label: 'Cerrar OP' },
 ]
 
 const ACCIONES: { key: keyof Permiso; label: string }[] = [
