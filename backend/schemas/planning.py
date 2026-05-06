@@ -129,3 +129,26 @@ class KanbanPrioridadItem(BaseModel):
 class KanbanBulkPrioridadIn(BaseModel):
     maquina_id: int
     items: List[KanbanPrioridadItem]
+
+
+class OpAbiertaOut(BaseModel):
+    docto: int
+    item: Optional[str] = None
+    marca: Optional[str] = None
+    cantidad: Optional[int] = None
+    cant_consumida: Optional[int] = None
+    ruta_op: Optional[str] = None
+    f851_fecha_terminacion: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class CerrarMasivoIn(BaseModel):
+    op_doctos: List[int]
+
+
+class CerrarMasivoOut(BaseModel):
+    ok: bool
+    enviados: int
+    respuesta: dict

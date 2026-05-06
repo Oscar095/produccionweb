@@ -16,6 +16,7 @@ from schemas.planning import (
     CapacidadMaquinaOut,
     KanbanColumnaOut, KanbanOrdenOut, KanbanBulkPrioridadIn,
     KanbanCheckOut, KanbanCheckToggleIn,
+    OpAbiertaOut, CerrarMasivoIn, CerrarMasivoOut,
 )
 from services.planning_engine import get_capacidad_semana, get_feasibility
 from services.working_hours import add_operative_hours
@@ -637,6 +638,42 @@ def create_parada(
     )
 
 
+@router.get("/ops-abiertas", response_model=List[OpAbiertaOut])
+def list_ops_abiertas(
+    db: Session = Depends(get_db),
+    _=Depends(require_permiso("cerrar_op", "puede_ver")),
+):
+    """Listado plano de OPs activas (estados==1), de mas antigua a mas nueva."""
+    # SQL Server no soporta NULLS LAST nativamente; usamos COALESCE con una
+    # fecha lejana para empujar los NULL al final. Default: por fecha de
+    # terminacion ASC (el cliente puede reordenar otras columnas).
+    rows = (
+        db.query(OpNumero)
+        .filter(
+            OpNumero.estados == 1,
+            func.lower(cast(OpNumero.tipo_inv, String(50))) == "in1430k.ex",
+        )
+        .order_by(
+            func.coalesce(OpNumero.f851_fecha_terminacion, datetime.max).asc(),
+            OpNumero.docto.asc(),
+        )
+        .all()
+    )
+    return [
+        OpAbiertaOut(
+            docto=r.docto,
+            item=r.item,
+            marca=r.marca,
+            cantidad=r.cantidad,
+            cant_consumida=r.cant_consumida,
+            ruta_op=r.ruta_op,
+            f851_fecha_terminacion=r.f851_fecha_terminacion,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
 @router.post("/cerrar-op/{op_docto}")
 def cerrar_op(
     op_docto: int,
@@ -679,6 +716,52 @@ def cerrar_op(
         )
 
     return {"ok": True, "op_docto": op_docto, "respuesta": payload}
+
+
+@router.post("/cerrar-ops-masivo", response_model=CerrarMasivoOut)
+def cerrar_ops_masivo(
+    body: CerrarMasivoIn,
+    _=Depends(require_permiso("cerrar_op", "puede_ver")),
+):
+    """Cierra multiples OPs en una sola llamada al API externo de Siesa."""
+    if not body.op_doctos:
+        raise HTTPException(status_code=400, detail="Lista de OPs vacia")
+
+    url = os.getenv("API_CERRAR_OPS", "").strip()
+    conni_key   = (os.getenv("ConniKey")   or os.getenv("CONNI_KEY")   or "").strip()
+    conni_token = (os.getenv("ConniToken") or os.getenv("CONNI_TOKEN") or "").strip()
+    if not url or not conni_key or not conni_token:
+        raise HTTPException(
+            status_code=500,
+            detail="API_CERRAR_OPS, ConniKey o ConniToken no configurados en .env",
+        )
+
+    headers = {
+        "ConniKey": conni_key,
+        "ConniToken": conni_token,
+        "Content-Type": "application/json",
+    }
+    docs = [{"f850_consec_docto": str(d)} for d in body.op_doctos]
+    payload_req = {"Documentos": docs}
+
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            resp = client.post(url, headers=headers, json=payload_req)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Error al contactar Siesa: {e}")
+
+    try:
+        respuesta = resp.json()
+    except ValueError:
+        respuesta = {"raw": resp.text}
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail={"mensaje": "Siesa rechazo la solicitud", "respuesta": respuesta},
+        )
+
+    return CerrarMasivoOut(ok=True, enviados=len(body.op_doctos), respuesta=respuesta)
 
 
 @router.delete("/paradas/{parada_id}")

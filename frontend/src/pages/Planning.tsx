@@ -11,8 +11,10 @@ import {
   GripVertical, LayoutGrid, CalendarDays,
   Layers, Factory, Package, Clock, Inbox,
   ChevronLeft, ChevronRight, CheckCircle2, Loader2, RotateCcw, RefreshCw,
+  ListChecks,
 } from 'lucide-react'
 import DeliveryTimeline from '../components/DeliveryTimeline'
+import CierreMasivo from '../components/CierreMasivo'
 import Loading from '../components/Loading'
 
 type CheckKey = 'impresion' | 'troquelado' | 'formacion' | 'bodega'
@@ -253,7 +255,7 @@ export default function Planning() {
   const qc = useQueryClient()
   const [semana, setSemana] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }))
 
-  const [tab, setTab] = useState<'kanban' | 'timeline'>('timeline')
+  const [tab, setTab] = useState<'kanban' | 'timeline' | 'cierre'>('timeline')
 
   const { data, isLoading } = useQuery({
     queryKey: ['kanban'],
@@ -429,6 +431,17 @@ export default function Planning() {
                   <LayoutGrid size={15} />
                   Kanban por Máquina
                 </button>
+                <button
+                  onClick={() => setTab('cierre')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    tab === 'cierre'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-white/80 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  <ListChecks size={15} />
+                  Cierre Masivo
+                </button>
               </div>
 
               <button
@@ -575,6 +588,8 @@ export default function Planning() {
             )}
           </>
         )}
+
+        {tab === 'cierre' && <CierreMasivo />}
       </div>
     </div>
   )

@@ -52,3 +52,20 @@ export const triggerRefreshWebhook = () =>
 
 export const toggleKanbanCheck = (op_docto: number, field: string) =>
   api.patch('/api/planning/kanban/checks', { op_docto, field }).then(r => r.data)
+
+export type OpAbierta = {
+  docto: number
+  item?: string | null
+  marca?: string | null
+  cantidad?: number | null
+  cant_consumida?: number | null
+  ruta_op?: string | null
+  f851_fecha_terminacion?: string | null
+  created_at?: string | null
+}
+
+export const getOpsAbiertas = (): Promise<OpAbierta[]> =>
+  api.get('/api/planning/ops-abiertas').then(r => r.data)
+
+export const cerrarOPsMasivo = (op_doctos: number[]) =>
+  api.post('/api/planning/cerrar-ops-masivo', { op_doctos }).then(r => r.data)
