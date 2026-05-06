@@ -46,3 +46,9 @@ export const deleteParada = (id: number) =>
 
 export const cerrarOP = (op_docto: number) =>
   api.post(`/api/planning/cerrar-op/${op_docto}`).then(r => r.data)
+
+export const triggerRefreshWebhook = () =>
+  fetch(import.meta.env.VITE_WEBHOOK_REFRESH_URL, { method: 'GET' })
+
+export const toggleKanbanCheck = (op_docto: number, field: string) =>
+  api.patch('/api/planning/kanban/checks', { op_docto, field }).then(r => r.data)

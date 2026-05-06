@@ -133,6 +133,28 @@ class KanbanPrioridad(Base):
                         onupdate=lambda: datetime.now(timezone.utc))
 
 
+class KanbanCheck(Base):
+    """
+    Estado visual de etapas productivas por OP (Impresion, Troquelado, Formacion, Bodega).
+    Una fila por OP. Toggles independientes que el supervisor enciende/apaga manualmente.
+    """
+    __tablename__ = "kanban_checks"
+    __table_args__ = (
+        UniqueConstraint("op_docto", name="uq_kanban_check_op"),
+        {"schema": "planeacion"},
+    )
+
+    id         = Column(Integer, primary_key=True, index=True)
+    op_docto   = Column(Integer, nullable=False, unique=True, index=True)
+    impresion  = Column(Boolean, nullable=False, default=False, server_default="0")
+    troquelado = Column(Boolean, nullable=False, default=False, server_default="0")
+    formacion  = Column(Boolean, nullable=False, default=False, server_default="0")
+    bodega     = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
 class ResumenSemanal(Base):
     """Registro de resúmenes semanales generados para supervisores."""
     __tablename__ = "resumen_semanal"

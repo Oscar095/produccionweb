@@ -2,11 +2,12 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, subMonths } from 'date-fns'
 import { getOrders, getRegistros, createRegistro, getCenters, getOperarios } from '../api/production'
+import { triggerRefreshWebhook } from '../api/planning'
 import {
   Search, Plus, X, ChevronDown, Check, Loader2,
   ClipboardList, Package, Factory, TrendingUp,
   Clock, CheckCircle2, AlertCircle, Activity,
-  Hash, Calendar, User, BarChart3,
+  Hash, Calendar, User, BarChart3, RefreshCw,
 } from 'lucide-react'
 import Loading from '../components/Loading'
 
@@ -414,6 +415,7 @@ function RegistroModal({ onClose }: { onClose: () => void }) {
 }
 
 export default function Orders() {
+  const qc = useQueryClient()
   const [tab, setTab] = useState<'ordenes' | 'registros'>('registros')
   const [buscar, setBuscar] = useState('')
   const [estado, setEstado] = useState('')
@@ -422,6 +424,18 @@ export default function Orders() {
   const [showModal, setShowModal] = useState(false)
   const [mesesAtras, setMesesAtras] = useState(2)
   const [regBuscar, setRegBuscar] = useState('')
+
+  const mutRefresh = useMutation({
+    mutationFn: () => triggerRefreshWebhook(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] })
+      qc.invalidateQueries({ queryKey: ['registros'] })
+      qc.invalidateQueries({ queryKey: ['kpis'] })
+    },
+    onError: () => {
+      alert('No se pudo actualizar las órdenes. Intenta de nuevo.')
+    },
+  })
 
   // Órdenes
   const { data, isLoading } = useQuery({
@@ -504,13 +518,23 @@ export default function Orders() {
                 Registros y órdenes activas · Supervisión diaria
               </p>
             </div>
-            <button
-              onClick={() => setShowModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-xl border border-white/20 transition-all backdrop-blur-sm"
-            >
-              <Plus size={15} />
-              Registrar Producción
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => mutRefresh.mutate()}
+                disabled={mutRefresh.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 disabled:cursor-wait text-white text-sm font-medium rounded-xl transition-all shadow-sm"
+              >
+                <RefreshCw size={15} className={mutRefresh.isPending ? 'animate-spin' : ''} />
+                {mutRefresh.isPending ? 'Actualizando...' : 'Actualizar Órdenes'}
+              </button>
+              <button
+                onClick={() => setShowModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-xl border border-white/20 transition-all backdrop-blur-sm"
+              >
+                <Plus size={15} />
+                Registrar Producción
+              </button>
+            </div>
           </div>
 
           {/* Tabs — glass style */}

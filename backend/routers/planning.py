@@ -8,13 +8,14 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_roles, require_permiso
 from models.production import Maquina, OpNumero
-from models.planning import Asignacion, ParadaProgramada, Usuario, KanbanPrioridad, RutaSiesa
+from models.planning import Asignacion, ParadaProgramada, Usuario, KanbanPrioridad, KanbanCheck, RutaSiesa
 from schemas.planning import (
     AsignacionCreate, AsignacionUpdate, AsignacionOut,
     PrioridadBulkItem, SuspenderOrdenIn,
     ParadaProgramadaCreate, ParadaProgramadaOut,
     CapacidadMaquinaOut,
     KanbanColumnaOut, KanbanOrdenOut, KanbanBulkPrioridadIn,
+    KanbanCheckOut, KanbanCheckToggleIn,
 )
 from services.planning_engine import get_capacidad_semana, get_feasibility
 from services.working_hours import add_operative_hours
@@ -154,16 +155,20 @@ def get_kanban(
         .filter(Maquina.rutas_siesa_id.isnot(None))
         .all()
     )
-    # dbo.maquinas.nombre es TEXT → SQL Server rechaza ORDER BY sobre TEXT.
-    # Ordenamos en Python para evitar castear en la query.
-    maquinas.sort(key=lambda m: (m.nombre or "").lower())
     if not maquinas:
         return {"columnas": []}
 
     ruta_ids = sorted({m.rutas_siesa_id for m in maquinas if m.rutas_siesa_id is not None})
     rutas = db.query(RutaSiesa).filter(RutaSiesa.id.in_(ruta_ids)).all()
     id_to_nombre = {r.id: r.nombre_ruta for r in rutas}
+    id_to_orden  = {r.id: (r.orden if r.orden is not None else 9999) for r in rutas}
     nombres = [n for n in id_to_nombre.values() if n]
+
+    # Orden de columnas por planeacion.rutas_siesa.orden ASC; el nombre de
+    # maquina actua como desempate cuando dos maquinas comparten ruta
+    # (p.ej. FLEXO 1 y FLEXO 2 con "Impresion Polyboard").
+    # dbo.maquinas.nombre es TEXT → ordenamos en Python para no castear en SQL.
+    maquinas.sort(key=lambda m: (id_to_orden.get(m.rutas_siesa_id, 9999), (m.nombre or "").lower()))
 
     if not nombres:
         ops = []
@@ -196,6 +201,11 @@ def get_kanban(
         )
         prio_map = {(p.maquina_id, p.op_docto): p.prioridad for p in prios}
 
+    check_map: dict[int, KanbanCheck] = {}
+    if op_doctos:
+        checks = db.query(KanbanCheck).filter(KanbanCheck.op_docto.in_(op_doctos)).all()
+        check_map = {c.op_docto: c for c in checks}
+
     columnas = []
     for m in maquinas:
         nombre_ruta = id_to_nombre.get(m.rutas_siesa_id)
@@ -212,6 +222,9 @@ def get_kanban(
 
         ops_maq_sorted = sorted(ops_maq, key=_sort_key)
 
+        # Cursor por maquina: la siguiente OP empieza cuando termina la anterior,
+        # de modo que las fechas estimadas crecen hacia abajo en el tablero.
+        cursor = datetime.utcnow()
         ordenes = []
         for op in ops_maq_sorted:
             cant = op.cantidad or 0
@@ -219,6 +232,34 @@ def get_kanban(
             estado_op = "Pendiente" if cons <= 0 else ("Completado" if cons >= cant else "En proceso")
             pct = round(min(cons / cant * 100, 100), 1) if cant else 0.0
             horas = round(op.cantidad / m.capacidad_hora, 2) if op.cantidad and m.capacidad_hora else None
+            chk = check_map.get(op.docto)
+            checks_out = KanbanCheckOut(
+                impresion=chk.impresion if chk else False,
+                troquelado=chk.troquelado if chk else False,
+                formacion=chk.formacion if chk else False,
+                bodega=chk.bodega if chk else False,
+            )
+
+            fecha_estimada = None
+            if op.cantidad and m.capacidad_hora:
+                horas_calc = 0.0
+                if not checks_out.impresion:  horas_calc += 48.0
+                if not checks_out.troquelado: horas_calc += 48.0
+                if not checks_out.formacion:  horas_calc += op.cantidad / m.capacidad_hora
+                horas_calc += 24.0
+                fin_natural = add_operative_hours(cursor, horas_calc)
+                # Piso: nunca antes de la fecha comprometida con Siesa
+                f851 = op.f851_fecha_terminacion
+                bumped = False
+                if f851 is not None and fin_natural < f851:
+                    fin_natural = f851
+                    bumped = True
+                fecha_estimada = fin_natural
+                cursor = fin_natural  # avanza para la siguiente OP de la columna
+                # DEBUG temporal — quitar despues de validar
+                f851_str = f851.date().isoformat() if f851 else "None"
+                print(f"[KANBAN] maq={(m.nombre or '')[:20]:<20} op={op.docto} horas={horas_calc:6.1f} fin={fin_natural.date()} f851={f851_str} bumped={bumped}")
+
             ordenes.append(KanbanOrdenOut(
                 op_docto=op.docto,
                 item=op.item,
@@ -230,8 +271,10 @@ def get_kanban(
                 pct_completado=pct,
                 horas_estimadas=horas,
                 fecha_entrega=op.f851_fecha_terminacion,
+                fecha_entrega_estimada=fecha_estimada,
                 created_at=op.created_at,
                 prioridad=prio_map.get((m.Id, op.docto)),
+                checks=checks_out,
             ).model_dump())
 
         columnas.append(KanbanColumnaOut(
@@ -290,6 +333,40 @@ def bulk_kanban_prioridades(
         actualizadas += 1
     db.commit()
     return {"ok": True, "actualizadas": actualizadas}
+
+
+_KANBAN_CHECK_FIELDS = {"impresion", "troquelado", "formacion", "bodega"}
+
+
+@router.patch("/kanban/checks")
+def toggle_kanban_check(
+    body: KanbanCheckToggleIn,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """Toggle (encender/apagar) un check de etapa productiva en una OP."""
+    if body.field not in _KANBAN_CHECK_FIELDS:
+        raise HTTPException(400, f"field debe ser uno de {sorted(_KANBAN_CHECK_FIELDS)}")
+
+    row = db.query(KanbanCheck).filter(KanbanCheck.op_docto == body.op_docto).first()
+    if not row:
+        row = KanbanCheck(op_docto=body.op_docto)
+        db.add(row)
+        db.flush()
+
+    nuevo = not bool(getattr(row, body.field))
+    setattr(row, body.field, nuevo)
+    db.commit()
+    db.refresh(row)
+    return {
+        "op_docto": row.op_docto,
+        "checks": KanbanCheckOut(
+            impresion=row.impresion,
+            troquelado=row.troquelado,
+            formacion=row.formacion,
+            bodega=row.bodega,
+        ).model_dump(),
+    }
 
 
 @router.post("/asignaciones", response_model=AsignacionOut)
@@ -460,7 +537,10 @@ def get_timeline(
     Solo muestra el producto real (tipo_inv='1430K.ex') de cada OP; los otros 2 son componentes en proceso."""
     hoy = datetime.utcnow().date()
 
-    all_ops = db.query(OpNumero).filter(OpNumero.f851_fecha_terminacion.isnot(None)).all()
+    all_ops = db.query(OpNumero).filter(
+        OpNumero.f851_fecha_terminacion.isnot(None),
+        OpNumero.estados == 1,
+    ).all()
 
     # Para cada docto, preferir la fila con tipo_inv='1430K.ex' (producto real); fallback a cualquiera.
     ops_by_docto: dict[int, OpNumero] = {}

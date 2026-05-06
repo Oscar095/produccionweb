@@ -4,16 +4,20 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { getKanban, bulkKanbanPrioridades, cerrarOP, resetKanbanPrioridades } from '../api/planning'
+import { getKanban, bulkKanbanPrioridades, cerrarOP, resetKanbanPrioridades, triggerRefreshWebhook, toggleKanbanCheck } from '../api/planning'
 import { format, startOfWeek, addWeeks, subWeeks, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
   GripVertical, LayoutGrid, CalendarDays,
   Layers, Factory, Package, Clock, Inbox,
-  ChevronLeft, ChevronRight, CheckCircle2, Loader2, RotateCcw,
+  ChevronLeft, ChevronRight, CheckCircle2, Loader2, RotateCcw, RefreshCw,
 } from 'lucide-react'
 import DeliveryTimeline from '../components/DeliveryTimeline'
 import Loading from '../components/Loading'
+
+type CheckKey = 'impresion' | 'troquelado' | 'formacion' | 'bodega'
+
+type OrdenChecks = Record<CheckKey, boolean>
 
 type OrdenCard = {
   op_docto: number
@@ -22,9 +26,18 @@ type OrdenCard = {
   estado_op?: string; pct_completado?: number
   horas_estimadas?: number
   fecha_entrega?: string
+  fecha_entrega_estimada?: string
   created_at?: string
   prioridad?: number | null
+  checks?: OrdenChecks
 }
+
+const CHECK_FIELDS: { key: CheckKey; label: string; full: string }[] = [
+  { key: 'impresion',  label: 'IMP', full: 'Impresión' },
+  { key: 'troquelado', label: 'TRO', full: 'Troquelado' },
+  { key: 'formacion',  label: 'FOR', full: 'Formación' },
+  { key: 'bodega',     label: 'BOD', full: 'Bodega' },
+]
 
 type Columna = {
   maquina_id: number
@@ -38,10 +51,12 @@ function SortableCard({
   orden,
   onCerrar,
   cerrando,
+  onToggleCheck,
 }: {
   orden: OrdenCard
   onCerrar: (op_docto: number) => void
   cerrando: boolean
+  onToggleCheck: (op_docto: number, field: CheckKey) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: orden.op_docto })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
@@ -59,6 +74,14 @@ function SortableCard({
   const fechaEntrega = orden.fecha_entrega
     ? format(parseISO(orden.fecha_entrega), "d MMM yyyy", { locale: es })
     : null
+
+  const fechaEstimada = orden.fecha_entrega_estimada
+    ? format(parseISO(orden.fecha_entrega_estimada), "d MMM yyyy", { locale: es })
+    : null
+
+  const vencida = orden.fecha_entrega
+    ? parseISO(orden.fecha_entrega).getTime() < Date.now()
+    : false
 
   const clearHide = () => {
     if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
@@ -87,7 +110,9 @@ function SortableCard({
     <div
       ref={el => { setNodeRef(el); (cardRef as React.MutableRefObject<HTMLDivElement | null>).current = el }}
       style={style}
-      className={`bg-white rounded-xl border border-slate-200 p-3 shadow-sm transition-all cursor-grab ${dragClasses}`}
+      className={`rounded-xl border p-3 shadow-sm transition-all cursor-grab ${
+        vencida ? 'bg-rose-50 border-rose-200' : 'bg-white border-slate-200'
+      } ${dragClasses}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -168,7 +193,39 @@ function SortableCard({
                 {fechaEntrega}
               </span>
             )}
+            {fechaEstimada && (
+              <span
+                title="Fecha estimada de entrega segun checks de etapas"
+                className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 rounded-md px-2 py-0.5 text-[11px] font-medium"
+              >
+                <CalendarDays size={10} />
+                Est. {fechaEstimada}
+              </span>
+            )}
           </div>
+          <div className="flex gap-1 mt-2">
+            {CHECK_FIELDS.map(({ key, label, full }) => {
+              const active = orden.checks?.[key] ?? false
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  title={full}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); onToggleCheck(orden.op_docto, key) }}
+                  className={`flex-1 text-[10px] font-bold px-1.5 py-1 rounded-md transition-colors ${
+                    active
+                      ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                      : 'bg-slate-200 text-slate-400 hover:bg-slate-300'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+
           {(orden.pct_completado ?? 0) > 0 && (
             <div className="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
               <div
@@ -282,6 +339,46 @@ export default function Planning() {
     },
   })
 
+  const mutToggleCheck = useMutation({
+    mutationFn: ({ op_docto, field }: { op_docto: number; field: CheckKey }) =>
+      toggleKanbanCheck(op_docto, field),
+    onMutate: async ({ op_docto, field }) => {
+      await qc.cancelQueries({ queryKey: ['kanban'] })
+      const previous = qc.getQueryData<{ columnas: Columna[] }>(['kanban'])
+      qc.setQueryData<{ columnas: Columna[] } | undefined>(['kanban'], (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          columnas: old.columnas.map(c => ({
+            ...c,
+            ordenes: c.ordenes.map(o => {
+              if (o.op_docto !== op_docto) return o
+              const base: OrdenChecks = o.checks ?? { impresion: false, troquelado: false, formacion: false, bodega: false }
+              return { ...o, checks: { ...base, [field]: !base[field] } }
+            }),
+          })),
+        }
+      })
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(['kanban'], context.previous)
+      alert('No se pudo actualizar el estado. Intenta de nuevo.')
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['kanban'] }),
+  })
+
+  const mutRefresh = useMutation({
+    mutationFn: () => triggerRefreshWebhook(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['kanban'] })
+      qc.invalidateQueries({ queryKey: ['timeline'] })
+    },
+    onError: () => {
+      alert('No se pudo actualizar las órdenes. Intenta de nuevo.')
+    },
+  })
+
   const handleDragEnd = (event: DragEndEvent, maquina_id: number, ordenes: OrdenCard[]) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
@@ -308,28 +405,39 @@ export default function Planning() {
               <h1 className="text-3xl font-bold text-white">Tablero de Planeación</h1>
             </div>
 
-            <div className="flex gap-1 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-1">
+            <div className="flex items-center gap-3">
+              <div className="flex gap-1 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-1">
+                <button
+                  onClick={() => setTab('timeline')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    tab === 'timeline'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-white/80 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  <CalendarDays size={15} />
+                  Proyección de Entregas
+                </button>
+                <button
+                  onClick={() => setTab('kanban')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    tab === 'kanban'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-white/80 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  <LayoutGrid size={15} />
+                  Kanban por Máquina
+                </button>
+              </div>
+
               <button
-                onClick={() => setTab('timeline')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  tab === 'timeline'
-                    ? 'bg-white text-slate-800 shadow-sm'
-                    : 'text-white/80 hover:text-white hover:bg-white/10'
-                }`}
+                onClick={() => mutRefresh.mutate()}
+                disabled={mutRefresh.isPending}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 disabled:cursor-wait text-white text-sm font-medium transition-all shadow-sm"
               >
-                <CalendarDays size={15} />
-                Proyección de Entregas
-              </button>
-              <button
-                onClick={() => setTab('kanban')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  tab === 'kanban'
-                    ? 'bg-white text-slate-800 shadow-sm'
-                    : 'text-white/80 hover:text-white hover:bg-white/10'
-                }`}
-              >
-                <LayoutGrid size={15} />
-                Kanban por Máquina
+                <RefreshCw size={15} className={mutRefresh.isPending ? 'animate-spin' : ''} />
+                {mutRefresh.isPending ? 'Actualizando...' : 'Actualizar Órdenes'}
               </button>
             </div>
           </div>
@@ -448,6 +556,7 @@ export default function Planning() {
                                   orden={o}
                                   onCerrar={(op) => mutCerrar.mutate(op)}
                                   cerrando={cerrandoOp === o.op_docto}
+                                  onToggleCheck={(op, field) => mutToggleCheck.mutate({ op_docto: op, field })}
                                 />
                               ))}
                               {ordenesVisibles.length === 0 && (

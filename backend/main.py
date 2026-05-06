@@ -15,7 +15,7 @@ from models import *   # registra todos los modelos con Base
 # Importar modelos de planeacion para crear tablas si no existen
 from models.planning import (
     Usuario, Asignacion, ParadaProgramada, ResumenSemanal,
-    Rol, RolPermiso, RutaSiesa, KanbanPrioridad,
+    Rol, RolPermiso, RutaSiesa, KanbanPrioridad, KanbanCheck,
 )
 
 from routers import auth, gantt, production, maintenance, planning, reports, roles, config, koski_ia
@@ -69,6 +69,7 @@ def startup():
             ParadaProgramada.__table__,
             ResumenSemanal.__table__,
             KanbanPrioridad.__table__,
+            KanbanCheck.__table__,
         ],
         checkfirst=True,
     )

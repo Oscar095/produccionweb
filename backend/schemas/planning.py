@@ -84,6 +84,18 @@ class CapacidadMaquinaOut(BaseModel):
     sobrecargada: bool
 
 
+class KanbanCheckOut(BaseModel):
+    impresion: bool = False
+    troquelado: bool = False
+    formacion: bool = False
+    bodega: bool = False
+
+
+class KanbanCheckToggleIn(BaseModel):
+    op_docto: int
+    field: str  # impresion | troquelado | formacion | bodega
+
+
 class KanbanOrdenOut(BaseModel):
     op_docto: int
     item: Optional[str] = None
@@ -95,8 +107,10 @@ class KanbanOrdenOut(BaseModel):
     pct_completado: Optional[float] = None
     horas_estimadas: Optional[float] = None
     fecha_entrega: Optional[datetime] = None
+    fecha_entrega_estimada: Optional[datetime] = None
     created_at: Optional[datetime] = None
     prioridad: Optional[int] = None
+    checks: KanbanCheckOut = KanbanCheckOut()
 
 
 class KanbanColumnaOut(BaseModel):
