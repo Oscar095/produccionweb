@@ -1,4 +1,5 @@
 from datetime import datetime, date
+from calendar import monthrange
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import or_, func, cast, Date
@@ -117,9 +118,29 @@ def get_kpis(db: Session = Depends(get_db), _=Depends(get_current_user)):
     asignadas_doctos = {a.op_docto for a in db.query(Asignacion.op_docto).filter(Asignacion.suspendida == False).all()}
     sin_asignar = sum(1 for o in ops if o.docto not in asignadas_doctos and (o.cant_consumida or 0) < (o.cantidad or 1))
     pct = round(completadas / total * 100, 1) if total else 0.0
+
+    hoy = date.today()
+    primer_dia = date(hoy.year, hoy.month, 1)
+    ultimo_dia = date(hoy.year, hoy.month, monthrange(hoy.year, hoy.month)[1])
+
+    mes_total = db.query(func.count(OpNumero.Id)).filter(
+        OpNumero.f851_fecha_terminacion >= primer_dia,
+        OpNumero.f851_fecha_terminacion <= ultimo_dia,
+    ).scalar() or 0
+
+    mes_atrasadas = db.query(func.count(OpNumero.Id)).filter(
+        OpNumero.f851_fecha_terminacion >= primer_dia,
+        OpNumero.f851_fecha_terminacion <= ultimo_dia,
+        OpNumero.f851_fecha_terminacion < hoy,
+        OpNumero.cant_consumida < OpNumero.cantidad,
+    ).scalar() or 0
+
+    tasa_servicio = round((1 - mes_atrasadas / mes_total) * 100, 1) if mes_total > 0 else 100.0
+
     return KPIProduccionOut(
         total_ordenes=total, completadas=completadas, en_proceso=en_proceso,
         pendientes=pendientes, sin_asignar=sin_asignar, pct_completado=pct,
+        mes_total=mes_total, mes_atrasadas=mes_atrasadas, tasa_servicio=tasa_servicio,
     )
 
 

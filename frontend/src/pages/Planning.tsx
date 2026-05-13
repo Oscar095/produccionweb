@@ -11,7 +11,7 @@ import {
   GripVertical, LayoutGrid, CalendarDays,
   Layers, Factory, Package, Clock, Inbox,
   ChevronLeft, ChevronRight, CheckCircle2, Loader2, RotateCcw, RefreshCw,
-  ListChecks,
+  ListChecks, Search, X,
 } from 'lucide-react'
 import DeliveryTimeline from '../components/DeliveryTimeline'
 import CierreMasivo from '../components/CierreMasivo'
@@ -255,7 +255,8 @@ export default function Planning() {
   const qc = useQueryClient()
   const [semana, setSemana] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }))
 
-  const [tab, setTab] = useState<'kanban' | 'timeline' | 'cierre'>('timeline')
+  const [tab, setTab] = useState<'kanban' | 'timeline' | 'cierre'>('kanban')
+  const [searchTerm, setSearchTerm] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['kanban'],
@@ -410,17 +411,6 @@ export default function Planning() {
             <div className="flex items-center gap-3">
               <div className="flex gap-1 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-1">
                 <button
-                  onClick={() => setTab('timeline')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    tab === 'timeline'
-                      ? 'bg-white text-slate-800 shadow-sm'
-                      : 'text-white/80 hover:text-white hover:bg-white/10'
-                  }`}
-                >
-                  <CalendarDays size={15} />
-                  Proyección de Entregas
-                </button>
-                <button
                   onClick={() => setTab('kanban')}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                     tab === 'kanban'
@@ -430,6 +420,17 @@ export default function Planning() {
                 >
                   <LayoutGrid size={15} />
                   Kanban por Máquina
+                </button>
+                <button
+                  onClick={() => setTab('timeline')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    tab === 'timeline'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-white/80 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  <CalendarDays size={15} />
+                  Proyección de Entregas
                 </button>
                 <button
                   onClick={() => setTab('cierre')}
@@ -493,6 +494,28 @@ export default function Planning() {
 
         {tab === 'kanban' && !isLoading && (
           <>
+            {cols.length > 0 && (
+              <div className="relative max-w-sm">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                  placeholder="Buscar marca, producto u OP..."
+                  className="w-full pl-9 pr-8 py-2 text-sm bg-white border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent placeholder:text-slate-400"
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            )}
+
             {cols.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center">
                 <Inbox size={40} className="mx-auto text-slate-200 mb-3" />
@@ -506,14 +529,24 @@ export default function Planning() {
                   // Orden default: fecha de terminación más cercana primero (ASC).
                   // Las OPs con prioridad manual (drag & drop) van primero en
                   // orden ascendente. Empates → tiebreaker por fecha de entrega.
-                  const ordenesVisibles = [...col.ordenes].sort((a, b) => {
-                    const pa = a.prioridad ?? 9999
-                    const pb = b.prioridad ?? 9999
-                    if (pa !== pb) return pa - pb
-                    const da = a.fecha_entrega ? new Date(a.fecha_entrega).getTime() : Number.POSITIVE_INFINITY
-                    const db = b.fecha_entrega ? new Date(b.fecha_entrega).getTime() : Number.POSITIVE_INFINITY
-                    return da - db
-                  })
+                  const ordenesVisibles = [...col.ordenes]
+                    .sort((a, b) => {
+                      const pa = a.prioridad ?? 9999
+                      const pb = b.prioridad ?? 9999
+                      if (pa !== pb) return pa - pb
+                      const da = a.fecha_entrega ? new Date(a.fecha_entrega).getTime() : Number.POSITIVE_INFINITY
+                      const db = b.fecha_entrega ? new Date(b.fecha_entrega).getTime() : Number.POSITIVE_INFINITY
+                      return da - db
+                    })
+                    .filter(o => {
+                      if (!searchTerm.trim()) return true
+                      const q = searchTerm.toLowerCase().trim()
+                      return (
+                        o.marca?.toLowerCase().includes(q) ||
+                        o.item?.toLowerCase().includes(q) ||
+                        String(o.op_docto).includes(q)
+                      )
+                    })
                   const tienePrioridadManual = col.ordenes.some(o => o.prioridad != null)
                   const reseteandoEsta = mutResetPrioridades.isPending && mutResetPrioridades.variables === col.maquina_id
                   return (
@@ -538,7 +571,9 @@ export default function Planning() {
                             </p>
                           </div>
                           <span className="bg-slate-100 text-slate-600 rounded-full px-2 py-0.5 text-xs font-bold">
-                            {ordenesVisibles.length}
+                            {searchTerm.trim()
+                              ? `${ordenesVisibles.length}/${col.ordenes.length}`
+                              : ordenesVisibles.length}
                           </span>
                           {tienePrioridadManual && (
                             <button
@@ -574,7 +609,7 @@ export default function Planning() {
                               ))}
                               {ordenesVisibles.length === 0 && (
                                 <div className="border-2 border-dashed border-slate-200 rounded-xl p-6 text-center text-slate-400 text-xs">
-                                  Sin órdenes asignadas
+                                  {searchTerm.trim() ? 'Sin coincidencias' : 'Sin órdenes asignadas'}
                                 </div>
                               )}
                             </div>

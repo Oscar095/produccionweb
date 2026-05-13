@@ -5,7 +5,7 @@ import { getTicketsActivos } from '../api/maintenance'
 import { getCapacidad } from '../api/planning'
 import {
   AlertTriangle, CheckCircle, Clock, AlertCircle, Activity,
-  LayoutDashboard, Gauge, Factory, Zap,
+  LayoutDashboard, Gauge, Factory, Zap, Target,
 } from 'lucide-react'
 
 // ── KPI Card (matches Reports.tsx aesthetic) ─────────────────────────────────
@@ -63,7 +63,7 @@ export default function Dashboard() {
       <div className="px-6 -mt-5 pb-10 max-w-full mx-auto space-y-6">
 
         {/* ── KPI cards ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <KpiCard
             icon={<CheckCircle size={22} className="text-emerald-600" />}
             label="Completadas"
@@ -89,6 +89,13 @@ export default function Dashboard() {
             value={kpis?.sin_asignar ?? '—'}
             sub="requieren asignación"
             accent="bg-amber-100"
+          />
+          <KpiCard
+            icon={<Target size={22} className="text-violet-600" />}
+            label="Tasa de Servicio"
+            value={kpis != null ? `${kpis.tasa_servicio}%` : '—'}
+            sub={kpis != null ? `${kpis.mes_atrasadas} atrasadas de ${kpis.mes_total} del mes` : undefined}
+            accent="bg-violet-100"
           />
         </div>
 

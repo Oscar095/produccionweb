@@ -65,6 +65,9 @@ class KPIProduccionOut(BaseModel):
     pendientes: int
     sin_asignar: int
     pct_completado: float
+    mes_total: int
+    mes_atrasadas: int
+    tasa_servicio: float
 
 
 class PersonalPlantaOut(BaseModel):
