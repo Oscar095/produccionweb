@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import { getKPIs } from '../api/production'
+import { getKPIs, getEquipmentAvailability } from '../api/production'
 import { getTicketsActivos } from '../api/maintenance'
 import { getCapacidad } from '../api/planning'
 import {
@@ -37,6 +37,7 @@ export default function Dashboard() {
   const { data: kpis } = useQuery({ queryKey: ['kpis'], queryFn: getKPIs, refetchInterval: 300_000 })
   const { data: activos } = useQuery({ queryKey: ['tickets-activos'], queryFn: getTicketsActivos, refetchInterval: 60_000 })
   const { data: capacidades } = useQuery({ queryKey: ['capacidad'], queryFn: () => getCapacidad(), refetchInterval: 300_000 })
+  const { data: disp } = useQuery({ queryKey: ['equipment-availability'], queryFn: getEquipmentAvailability, refetchInterval: 300_000 })
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -63,7 +64,7 @@ export default function Dashboard() {
       <div className="px-6 -mt-5 pb-10 max-w-full mx-auto space-y-6">
 
         {/* ── KPI cards ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
           <KpiCard
             icon={<CheckCircle size={22} className="text-emerald-600" />}
             label="Completadas"
@@ -96,6 +97,13 @@ export default function Dashboard() {
             value={kpis != null ? `${kpis.tasa_servicio}%` : '—'}
             sub={kpis != null ? `${kpis.mes_atrasadas} atrasadas de ${kpis.mes_total} del mes` : undefined}
             accent="bg-violet-100"
+          />
+          <KpiCard
+            icon={<Gauge size={22} className="text-teal-600" />}
+            label="Disponibilidad Equipos"
+            value={disp != null ? `${disp.disponibilidad_pct}%` : '—'}
+            sub={disp != null ? `${disp.maquinas_evaluadas} máquinas · mes en curso` : undefined}
+            accent="bg-teal-100"
           />
         </div>
 

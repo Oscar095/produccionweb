@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_roles
 from models.production import OpNumero, RegistroProduccion, Maquina, CentroCostos, PersonalPlanta
+from models.maintenance import SolicitudMantenimiento
 from models.planning import Asignacion
 from schemas.production import (
     OpNumeroOut, KPIProduccionOut, MaquinaOut, CentroCostosOut,
     RegistroProduccionCreate, RegistroProduccionOut, PersonalPlantaOut,
+    EquipmentAvailabilityOut, MaquinaAvailabilityOut, PeriodoOut,
 )
 
 router = APIRouter(prefix="/api/production", tags=["production"])
@@ -141,6 +143,97 @@ def get_kpis(db: Session = Depends(get_db), _=Depends(get_current_user)):
         total_ordenes=total, completadas=completadas, en_proceso=en_proceso,
         pendientes=pendientes, sin_asignar=sin_asignar, pct_completado=pct,
         mes_total=mes_total, mes_atrasadas=mes_atrasadas, tasa_servicio=tasa_servicio,
+    )
+
+
+@router.get("/equipment-availability", response_model=EquipmentAvailabilityOut)
+def get_equipment_availability(db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """
+    Disponibilidad por máquina = (24*días_trabajados − horas_parada) / (24*días_trabajados)
+    Período: mes en curso (día 1 → hoy). Horas de parada vienen de
+    dbo.solicitudes_mantenimiento (correctivo); tickets abiertos se cuentan
+    hasta NOW.
+    """
+    hoy = datetime.now()
+    primer_dia = datetime(hoy.year, hoy.month, 1)
+
+    dias_por_maquina = dict(
+        db.query(
+            RegistroProduccion.maquina,
+            func.count(func.distinct(cast(RegistroProduccion.fecha, Date))),
+        )
+        .filter(RegistroProduccion.fecha >= primer_dia, RegistroProduccion.fecha <= hoy)
+        .group_by(RegistroProduccion.maquina)
+        .all()
+    )
+
+    tickets = (
+        db.query(
+            SolicitudMantenimiento.row_maquina,
+            SolicitudMantenimiento.fecha,
+            SolicitudMantenimiento.fecha_solucion,
+        )
+        .filter(
+            SolicitudMantenimiento.fecha <= hoy,
+            func.coalesce(SolicitudMantenimiento.fecha_solucion, hoy) >= primer_dia,
+        )
+        .all()
+    )
+
+    horas_parada_por_maquina: dict[int, float] = {}
+    for row_maquina, fecha_ini, fecha_fin in tickets:
+        if row_maquina is None or fecha_ini is None:
+            continue
+        ini = max(fecha_ini, primer_dia)
+        fin = min(fecha_fin or hoy, hoy)
+        if fin <= ini:
+            continue
+        horas = (fin - ini).total_seconds() / 3600.0
+        horas_parada_por_maquina[row_maquina] = horas_parada_por_maquina.get(row_maquina, 0.0) + horas
+
+    maquina_ids = set(dias_por_maquina.keys()) | set(horas_parada_por_maquina.keys())
+    nombres = {
+        m.Id: m.nombre
+        for m in db.query(Maquina.Id, Maquina.nombre).filter(Maquina.Id.in_(maquina_ids)).all()
+    } if maquina_ids else {}
+
+    por_maquina: list[MaquinaAvailabilityOut] = []
+    horas_disp_total = 0.0
+    horas_parada_total = 0.0
+    maquinas_evaluadas = 0
+
+    for mid, dias in dias_por_maquina.items():
+        if dias <= 0:
+            continue
+        horas_disp = 24.0 * dias
+        horas_parada = min(horas_parada_por_maquina.get(mid, 0.0), horas_disp)
+        disp_pct = round(max(0.0, (horas_disp - horas_parada) / horas_disp) * 100, 1)
+        por_maquina.append(MaquinaAvailabilityOut(
+            maquina_id=mid,
+            maquina_nombre=nombres.get(mid),
+            dias_trabajados=dias,
+            horas_disponibles=round(horas_disp, 1),
+            horas_parada=round(horas_parada, 1),
+            disponibilidad_pct=disp_pct,
+        ))
+        horas_disp_total += horas_disp
+        horas_parada_total += horas_parada
+        maquinas_evaluadas += 1
+
+    por_maquina.sort(key=lambda x: x.disponibilidad_pct)
+
+    disponibilidad_global = (
+        round((horas_disp_total - horas_parada_total) / horas_disp_total * 100, 1)
+        if horas_disp_total > 0 else 100.0
+    )
+
+    return EquipmentAvailabilityOut(
+        disponibilidad_pct=disponibilidad_global,
+        horas_disponibles_total=round(horas_disp_total, 1),
+        horas_parada_total=round(horas_parada_total, 1),
+        maquinas_evaluadas=maquinas_evaluadas,
+        periodo=PeriodoOut(inicio=primer_dia.date(), fin=hoy.date()),
+        por_maquina=por_maquina,
     )
 
 

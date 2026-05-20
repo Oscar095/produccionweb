@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, date
+from typing import Optional, List
 from pydantic import BaseModel, computed_field
 
 
@@ -68,6 +68,29 @@ class KPIProduccionOut(BaseModel):
     mes_total: int
     mes_atrasadas: int
     tasa_servicio: float
+
+
+class MaquinaAvailabilityOut(BaseModel):
+    maquina_id: int
+    maquina_nombre: Optional[str] = None
+    dias_trabajados: int
+    horas_disponibles: float
+    horas_parada: float
+    disponibilidad_pct: float
+
+
+class PeriodoOut(BaseModel):
+    inicio: date
+    fin: date
+
+
+class EquipmentAvailabilityOut(BaseModel):
+    disponibilidad_pct: float
+    horas_disponibles_total: float
+    horas_parada_total: float
+    maquinas_evaluadas: int
+    periodo: PeriodoOut
+    por_maquina: List[MaquinaAvailabilityOut]
 
 
 class PersonalPlantaOut(BaseModel):
