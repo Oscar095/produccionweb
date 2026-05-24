@@ -10,3 +10,6 @@ export const getEstadosMaquinas = () => api.get('/api/config/estados-maquinas').
 export const getRutasSiesa = () => api.get('/api/config/rutas-siesa').then(r => r.data)
 export const createRutaSiesa = (data: unknown) => api.post('/api/config/rutas-siesa', data).then(r => r.data)
 export const updateRutaSiesa = (id: number, data: unknown) => api.patch(`/api/config/rutas-siesa/${id}`, data).then(r => r.data)
+
+export const getMetas = () => api.get('/api/config/metas').then(r => r.data)
+export const updateMeta = (kpi: string, valor: number) => api.put(`/api/config/metas/${kpi}`, { valor }).then(r => r.data)

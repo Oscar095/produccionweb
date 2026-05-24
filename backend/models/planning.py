@@ -3,7 +3,7 @@ Modelos SQLAlchemy para tablas NUEVAS en esquema planeacion.*.
 Estas son las únicas tablas que la plataforma escribe.
 """
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, Float
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -151,6 +151,19 @@ class KanbanCheck(Base):
     formacion  = Column(Boolean, nullable=False, default=False, server_default="0")
     bodega     = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MetaKPI(Base):
+    """Metas (targets) para los KPIs del dashboard."""
+    __tablename__ = "metas_kpi"
+    __table_args__ = {"schema": "planeacion"}
+
+    id         = Column(Integer, primary_key=True)
+    kpi        = Column(String(50), nullable=False, unique=True)   # slug: tasa_servicio | disponibilidad | eficiencia
+    label      = Column(String(100), nullable=False)
+    valor      = Column(Float, nullable=False, default=0.0)        # porcentaje 0-100
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

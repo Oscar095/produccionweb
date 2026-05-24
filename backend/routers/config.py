@@ -6,11 +6,12 @@ from database import get_db
 from auth import get_current_user, require_roles
 from models.production import Maquina, CentroCostos
 from models.maintenance import EstadoMaquina
-from models.planning import RutaSiesa
+from models.planning import RutaSiesa, MetaKPI
 from schemas.config import (
     MaquinaCreate, MaquinaUpdate, MaquinaOut,
     CentroCostosOut, EstadoMaquinaOut,
     RutaSiesaOut, RutaSiesaCreate, RutaSiesaUpdate,
+    MetaKPIOut, MetaKPIUpdate,
 )
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -186,3 +187,26 @@ def update_ruta_siesa(
     db.commit()
     db.refresh(rs)
     return rs
+
+
+# ─── Metas KPI ───────────────────────────────────────────────────────────────
+
+@router.get("/metas", response_model=List[MetaKPIOut])
+def list_metas(db: Session = Depends(get_db), _=Depends(get_current_user)):
+    return db.query(MetaKPI).order_by(MetaKPI.id).all()
+
+
+@router.put("/metas/{kpi}", response_model=MetaKPIOut)
+def update_meta(
+    kpi: str,
+    body: MetaKPIUpdate,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles("Administrador")),
+):
+    meta = db.query(MetaKPI).filter(MetaKPI.kpi == kpi).first()
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"KPI '{kpi}' no encontrado")
+    meta.valor = body.valor
+    db.commit()
+    db.refresh(meta)
+    return meta

@@ -93,6 +93,64 @@ class EquipmentAvailabilityOut(BaseModel):
     por_maquina: List[MaquinaAvailabilityOut]
 
 
+class MaquinaEficienciaOut(BaseModel):
+    maquina_id: int
+    maquina_nombre: Optional[str] = None
+    dias_trabajados: int
+    horas_operativas: float        # 24×días − paradas de mantenimiento
+    capacidad_hora: int
+    produccion_real: int           # produccion + clase_b + desecho
+    produccion_teorica: float      # capacidad_hora × horas_operativas
+    eficiencia_pct: float
+
+
+class EquipmentEfficiencyOut(BaseModel):
+    eficiencia_pct: float
+    produccion_real_total: int
+    produccion_teorica_total: float
+    maquinas_evaluadas: int
+    periodo: PeriodoOut
+    por_maquina: List[MaquinaEficienciaOut]
+
+
+class MaquinaCalidadOut(BaseModel):
+    maquina_id: int
+    maquina_nombre: Optional[str] = None
+    produccion_buena: int          # produccion
+    clase_b: int
+    desecho: int
+    produccion_total: int          # produccion + clase_b + desecho
+    calidad_pct: float
+
+
+class EquipmentQualityOut(BaseModel):
+    calidad_pct: float
+    produccion_buena_total: int
+    produccion_total: int
+    maquinas_evaluadas: int
+    periodo: PeriodoOut
+    por_maquina: List[MaquinaCalidadOut]
+
+
+class MaquinaOEEOut(BaseModel):
+    maquina_id: int
+    maquina_nombre: Optional[str] = None
+    disponibilidad_pct: float
+    rendimiento_pct: float
+    calidad_pct: float
+    oee_pct: float
+
+
+class EquipmentOEEOut(BaseModel):
+    oee_pct: float
+    disponibilidad_pct: float
+    rendimiento_pct: float
+    calidad_pct: float
+    maquinas_evaluadas: int
+    periodo: PeriodoOut
+    por_maquina: List[MaquinaOEEOut]
+
+
 class PersonalPlantaOut(BaseModel):
     Id: int
     nombre_operario: str

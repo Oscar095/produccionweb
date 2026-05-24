@@ -3,6 +3,12 @@ import { api } from './client'
 export const getKPIs = () => api.get('/api/production/kpis').then(r => r.data)
 export const getEquipmentAvailability = () =>
   api.get('/api/production/equipment-availability').then(r => r.data)
+export const getEquipmentEfficiency = () =>
+  api.get('/api/production/equipment-efficiency').then(r => r.data)
+export const getEquipmentQuality = () =>
+  api.get('/api/production/equipment-quality').then(r => r.data)
+export const getEquipmentOEE = () =>
+  api.get('/api/production/equipment-oee').then(r => r.data)
 export const getOrders = (params?: Record<string, unknown>) =>
   api.get('/api/production/orders', { params }).then(r => r.data)
 export const getOrder = (docto: number) =>

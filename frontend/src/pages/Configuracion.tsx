@@ -4,9 +4,10 @@ import {
   getMaquinas, createMaquina, updateMaquina,
   getCentrosCostos, getEstadosMaquinas,
   getRutasSiesa, createRutaSiesa, updateRutaSiesa,
+  getMetas, updateMeta,
 } from '../api/config'
 import { usePermiso } from '../store/auth'
-import { PlusCircle, Pencil, X, Cpu, Route, Settings, Layers } from 'lucide-react'
+import { PlusCircle, Pencil, X, Cpu, Route, Settings, Layers, Target, Check } from 'lucide-react'
 import Loading from '../components/Loading'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -550,9 +551,151 @@ function TabRutasSiesa() {
   )
 }
 
+// ─── Tab: Metas KPI ───────────────────────────────────────────────────────────
+type MetaKPI = { id: number; kpi: string; label: string; valor: number }
+
+const KPI_ICON: Record<string, { color: string; bg: string }> = {
+  tasa_servicio:  { color: 'text-violet-600', bg: 'bg-violet-100' },
+  disponibilidad: { color: 'text-teal-600',   bg: 'bg-teal-100' },
+  eficiencia:     { color: 'text-orange-600', bg: 'bg-orange-100' },
+}
+
+function TabMetas() {
+  const qc = useQueryClient()
+  const permiso = usePermiso('configuracion')
+
+  const { data: metas = [], isLoading } = useQuery<MetaKPI[]>({
+    queryKey: ['config-metas'],
+    queryFn: getMetas,
+  })
+
+  const [editing, setEditing] = useState<Record<string, string>>({})
+
+  const mutUpdate = useMutation({
+    mutationFn: ({ kpi, valor }: { kpi: string; valor: number }) => updateMeta(kpi, valor),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['config-metas'] }),
+  })
+
+  const startEdit = (m: MetaKPI) =>
+    setEditing(prev => ({ ...prev, [m.kpi]: String(m.valor) }))
+
+  const saveEdit = (m: MetaKPI) => {
+    const raw = editing[m.kpi]
+    const parsed = parseFloat(raw)
+    if (isNaN(parsed) || parsed < 0 || parsed > 100) return
+    mutUpdate.mutate({ kpi: m.kpi, valor: parsed })
+    setEditing(prev => { const n = { ...prev }; delete n[m.kpi]; return n })
+  }
+
+  const cancelEdit = (kpi: string) =>
+    setEditing(prev => { const n = { ...prev }; delete n[kpi]; return n })
+
+  if (isLoading) return <Loading label="Cargando metas..." />
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center">
+            <Target size={18} className="text-indigo-600" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <Layers size={14} className="text-slate-400" />
+              <span className="text-sm font-semibold text-slate-600 uppercase tracking-wide">Metas de KPIs</span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Objetivos mostrados como referencia en el dashboard de producción
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {metas.map(m => {
+            const style = KPI_ICON[m.kpi] ?? { color: 'text-slate-600', bg: 'bg-slate-100' }
+            const isEditingThis = m.kpi in editing
+
+            return (
+              <div
+                key={m.kpi}
+                className="flex items-center justify-between gap-4 p-4 rounded-xl border border-slate-100 bg-slate-50/60 hover:bg-white transition-colors"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${style.bg}`}>
+                    <Target size={16} className={style.color} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-700">{m.label}</p>
+                    <p className="text-xs text-slate-400 font-mono">{m.kpi}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {isEditingThis ? (
+                    <>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={0.5}
+                          className="w-24 px-3 py-1.5 pr-7 bg-white border border-blue-300 rounded-lg text-sm text-slate-700 text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={editing[m.kpi]}
+                          onChange={e => setEditing(prev => ({ ...prev, [m.kpi]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') saveEdit(m); if (e.key === 'Escape') cancelEdit(m.kpi) }}
+                          autoFocus
+                        />
+                        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
+                      </div>
+                      <button
+                        onClick={() => saveEdit(m)}
+                        disabled={mutUpdate.isPending}
+                        className="p-1.5 bg-emerald-100 text-emerald-600 hover:bg-emerald-200 rounded-lg transition"
+                        title="Guardar"
+                      >
+                        <Check size={15} />
+                      </button>
+                      <button
+                        onClick={() => cancelEdit(m.kpi)}
+                        className="p-1.5 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-lg transition"
+                        title="Cancelar"
+                      >
+                        <X size={15} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className={`text-lg font-bold tabular-nums ${style.color}`}>
+                        {m.valor.toFixed(1)}%
+                      </span>
+                      {permiso.editar && (
+                        <button
+                          onClick={() => startEdit(m)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                          title="Editar meta"
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <p className="text-xs text-slate-400 mt-5 pt-4 border-t border-slate-100">
+          Solo administradores pueden modificar las metas. Los valores se reflejan inmediatamente en el dashboard.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function Configuracion() {
-  const [tab, setTab] = useState<'maquinas' | 'rutas'>('maquinas')
+  const [tab, setTab] = useState<'maquinas' | 'rutas' | 'metas'>('maquinas')
 
   const pillBtn = (active: boolean) =>
     `flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg transition-all ${
@@ -589,9 +732,14 @@ export default function Configuracion() {
           <button className={pillBtn(tab === 'rutas')} onClick={() => setTab('rutas')}>
             <Route size={14} /> Rutas SIESA
           </button>
+          <button className={pillBtn(tab === 'metas')} onClick={() => setTab('metas')}>
+            <Target size={14} /> Metas KPI
+          </button>
         </div>
 
-        {tab === 'maquinas' ? <TabMaquinas /> : <TabRutasSiesa />}
+        {tab === 'maquinas' && <TabMaquinas />}
+        {tab === 'rutas' && <TabRutasSiesa />}
+        {tab === 'metas' && <TabMetas />}
       </div>
     </div>
   )

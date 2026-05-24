@@ -15,7 +15,7 @@ from models import *   # registra todos los modelos con Base
 # Importar modelos de planeacion para crear tablas si no existen
 from models.planning import (
     Usuario, Asignacion, ParadaProgramada, ResumenSemanal,
-    Rol, RolPermiso, RutaSiesa, KanbanPrioridad, KanbanCheck,
+    Rol, RolPermiso, RutaSiesa, KanbanPrioridad, KanbanCheck, MetaKPI,
 )
 
 from routers import auth, gantt, production, maintenance, planning, reports, roles, config, koski_ia
@@ -70,9 +70,27 @@ def startup():
             ResumenSemanal.__table__,
             KanbanPrioridad.__table__,
             KanbanCheck.__table__,
+            MetaKPI.__table__,
         ],
         checkfirst=True,
     )
+
+    # Seed metas KPI por defecto (idempotente)
+    try:
+        from database import SessionLocal
+        _METAS_DEFAULT = [
+            ("tasa_servicio",  "Tasa de Servicio",       95.0),
+            ("disponibilidad", "Disponibilidad Equipos",  90.0),
+            ("eficiencia",     "Eficiencia Equipos",      80.0),
+        ]
+        with SessionLocal() as session:
+            for kpi, label, valor in _METAS_DEFAULT:
+                if not session.query(MetaKPI).filter(MetaKPI.kpi == kpi).first():
+                    session.add(MetaKPI(kpi=kpi, label=label, valor=valor))
+            session.commit()
+        print("[startup] seed metas KPI OK")
+    except Exception as e:
+        print(f"[startup] ERROR sembrando metas KPI: {e}")
 
     # Migraciones idempotentes de columnas agregadas a tablas existentes
     try:

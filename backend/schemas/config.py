@@ -72,3 +72,16 @@ class MaquinaOut(BaseModel):
     rutas_siesa_nombre: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class MetaKPIOut(BaseModel):
+    id: int
+    kpi: str
+    label: str
+    valor: float
+
+    model_config = {"from_attributes": True}
+
+
+class MetaKPIUpdate(BaseModel):
+    valor: float
