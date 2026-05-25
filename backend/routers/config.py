@@ -28,6 +28,7 @@ def _maquina_to_out(m: Maquina) -> MaquinaOut:
         estado_descripcion=m.estado_obj.estado_descripcion if m.estado_obj else None,
         rutas_siesa_id=m.rutas_siesa_id,
         rutas_siesa_nombre=m.ruta_siesa_obj.nombre_ruta if m.ruta_siesa_obj else None,
+        calcula_capacidad=bool(m.calcula_capacidad) if m.calcula_capacidad is not None else True,
     )
 
 
@@ -62,6 +63,7 @@ def create_maquina(
             centro_costos_id=body.centro_costos_id,
             estado=body.estado_id,
             rutas_siesa_id=body.rutas_siesa_id,
+            calcula_capacidad=body.calcula_capacidad,
         )
         db.add(m)
         db.commit()
@@ -104,6 +106,8 @@ def update_maquina(
         m.rutas_siesa_id = body.rutas_siesa_id
     elif body.rutas_siesa_id == 0:
         m.rutas_siesa_id = None
+    if body.calcula_capacidad is not None:
+        m.calcula_capacidad = body.calcula_capacidad
 
     db.commit()
     db.refresh(m)

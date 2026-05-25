@@ -12,15 +12,18 @@ Cada fila del Gantt representa una Ruta SIESA. La barra agregada se segmenta en:
 La cola FIFO arranca HOY 00:00 (movido al lunes si cae en sáb/dom). Las
 horas operativas se acumulan saltando sábado y domingo.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict
-from sqlalchemy import cast, String
+from sqlalchemy import cast, String, func, extract
 from sqlalchemy.orm import Session
 
-from models.production import Maquina, OpNumero
+from models.production import Maquina, OpNumero, RegistroProduccion, CentroCostos
 from models.planning import RutaSiesa
-from schemas.gantt import GanttDataOut, GanttRecurso, GanttTarea, GanttOpDetalle
-from services.working_hours import add_operative_hours, _next_business_start
+from schemas.gantt import (
+    GanttDataOut, GanttRecurso, GanttTarea, GanttOpDetalle,
+    CapacidadesDataOut, CapacidadMaquinaItem, CapacidadTendenciaPunto,
+)
+from services.working_hours import add_operative_hours, _next_business_start, operative_hours_between
 
 
 COLOR_ATRASADO = "#EF4444"   # rojo
@@ -260,3 +263,128 @@ def get_gantt_data(
         ))
 
     return GanttDataOut(recursos=recursos, tareas=tareas, desde=desde, hasta=hasta)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Capacidades / Ocupación
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _month_range(anchor: datetime) -> tuple[datetime, datetime]:
+    """Devuelve (inicio_mes, inicio_mes_siguiente) para anchor."""
+    inicio = anchor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if inicio.month == 12:
+        siguiente = inicio.replace(year=inicio.year + 1, month=1)
+    else:
+        siguiente = inicio.replace(month=inicio.month + 1)
+    return inicio, siguiente
+
+
+def get_capacidades_data(db: Session, desde: datetime, hasta: datetime) -> CapacidadesDataOut:
+    """
+    Calcula ocupación por máquina = (produccion + clase_b) / (capacidad_hora * horas_op).
+    Horas operativas: Lun–Vie 24h (no se descuentan paradas programadas).
+    """
+    # Máquinas con capacidad declarada (las que pueden producir unidades).
+    maquinas: List[Maquina] = (
+        db.query(Maquina)
+        .filter(Maquina.capacidad_hora > 0)
+        .all()
+    )
+    # Centros de costo para resolver nombres.
+    centros = {c.Id: c for c in db.query(CentroCostos).all()}
+
+    horas_disp_periodo = operative_hours_between(desde, hasta)
+
+    # Suma de producción + clase_b por máquina, una sola query, en el período.
+    unidades_expr = func.sum(
+        func.coalesce(RegistroProduccion.produccion, 0)
+        + func.coalesce(RegistroProduccion.clase_b, 0)
+    )
+    prod_rows = (
+        db.query(RegistroProduccion.maquina, unidades_expr)
+        .filter(
+            RegistroProduccion.fecha >= desde,
+            RegistroProduccion.fecha <= hasta,
+        )
+        .group_by(RegistroProduccion.maquina)
+        .all()
+    )
+    prod_por_maquina: Dict[int, int] = {mid: int(total or 0) for mid, total in prod_rows}
+
+    items: List[CapacidadMaquinaItem] = []
+    for m in maquinas:
+        cap_hora = m.capacidad_hora or 0
+        teoricas = int(cap_hora * horas_disp_periodo)
+        producidas = prod_por_maquina.get(m.Id, 0)
+        ocupacion = (producidas / teoricas * 100.0) if teoricas > 0 else 0.0
+        centro = centros.get(m.centro_costos_id)
+        items.append(CapacidadMaquinaItem(
+            maquina_id=m.Id,
+            maquina_nombre=(m.nombre or "").strip() or f"Máquina {m.Id}",
+            centro_costos=(centro.centro if centro and centro.centro else None),
+            capacidad_hora=cap_hora,
+            horas_disponibles=round(horas_disp_periodo, 2),
+            unidades_teoricas=teoricas,
+            unidades_producidas=producidas,
+            ocupacion_pct=round(ocupacion, 2),
+        ))
+
+    items.sort(key=lambda it: it.ocupacion_pct, reverse=True)
+
+    # ─── Tendencia mensual: últimos 12 meses tomando "hasta" como ancla ───
+    inicio_mes_actual, fin_mes_actual = _month_range(hasta)
+    # Construir lista de 12 meses (más antiguo → más reciente).
+    meses: List[tuple[datetime, datetime]] = []
+    cursor_mes = inicio_mes_actual
+    for _ in range(12):
+        meses.append(_month_range(cursor_mes))
+        # mes anterior
+        prev_last_day = cursor_mes.replace(day=1) - timedelta(seconds=1)
+        cursor_mes = prev_last_day.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    meses.reverse()
+    inicio_tendencia = meses[0][0]
+
+    # Suma por (año, mes, máquina) en una sola query.
+    year_col = extract("year", RegistroProduccion.fecha)
+    month_col = extract("month", RegistroProduccion.fecha)
+    trend_rows = (
+        db.query(
+            year_col.label("y"),
+            month_col.label("m"),
+            RegistroProduccion.maquina.label("maq"),
+            unidades_expr.label("total"),
+        )
+        .filter(
+            RegistroProduccion.fecha >= inicio_tendencia,
+            RegistroProduccion.fecha < fin_mes_actual,
+        )
+        .group_by(year_col, month_col, RegistroProduccion.maquina)
+        .all()
+    )
+    trend_idx: Dict[tuple, int] = {
+        (int(r.y), int(r.m), int(r.maq)): int(r.total or 0) for r in trend_rows
+    }
+
+    tendencia: List[CapacidadTendenciaPunto] = []
+    for b_ini, b_fin in meses:
+        horas_mes = operative_hours_between(b_ini, b_fin)
+        for m in maquinas:
+            cap_hora = m.capacidad_hora or 0
+            teor_mes = cap_hora * horas_mes
+            prod_mes = trend_idx.get((b_ini.year, b_ini.month, m.Id), 0)
+            ocup_mes = (prod_mes / teor_mes * 100.0) if teor_mes > 0 else 0.0
+            tendencia.append(CapacidadTendenciaPunto(
+                bucket=f"{b_ini.year:04d}-{b_ini.month:02d}",
+                bucket_inicio=b_ini,
+                bucket_fin=b_fin,
+                maquina_id=m.Id,
+                ocupacion_pct=round(ocup_mes, 2),
+            ))
+
+    return CapacidadesDataOut(
+        desde=desde,
+        hasta=hasta,
+        horas_disponibles_periodo=round(horas_disp_periodo, 2),
+        maquinas=items,
+        tendencia_mensual=tendencia,
+    )

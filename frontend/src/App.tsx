@@ -12,6 +12,7 @@ import Orders from './pages/Orders'
 import Usuarios from './pages/Usuarios'
 import Configuracion from './pages/Configuracion'
 import Chat from './pages/Chat'
+import Indicadores from './pages/Indicadores'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 60_000, retry: 1 } },
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/usuarios"        element={<ProtectedRoute><Usuarios /></ProtectedRoute>} />
           <Route path="/configuracion"   element={<ProtectedRoute><Configuracion /></ProtectedRoute>} />
           <Route path="/chat"            element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+          <Route path="/indicadores"     element={<ProtectedRoute><Indicadores /></ProtectedRoute>} />
           <Route path="*"            element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

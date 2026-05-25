@@ -65,3 +65,32 @@ class GanttDataOut(BaseModel):
     tareas: List[GanttTarea]
     desde: datetime
     hasta: datetime
+
+
+class CapacidadMaquinaItem(BaseModel):
+    """Resumen de ocupación por máquina en el período seleccionado."""
+    maquina_id: int
+    maquina_nombre: str
+    centro_costos: Optional[str] = None
+    capacidad_hora: int
+    horas_disponibles: float
+    unidades_teoricas: int
+    unidades_producidas: int
+    ocupacion_pct: float
+
+
+class CapacidadTendenciaPunto(BaseModel):
+    """Un punto del gráfico de tendencia mensual (último año)."""
+    bucket: str                       # ej. "2026-04"
+    bucket_inicio: datetime
+    bucket_fin: datetime
+    maquina_id: int
+    ocupacion_pct: float
+
+
+class CapacidadesDataOut(BaseModel):
+    desde: datetime
+    hasta: datetime
+    horas_disponibles_periodo: float
+    maquinas: List[CapacidadMaquinaItem]
+    tendencia_mensual: List[CapacidadTendenciaPunto]

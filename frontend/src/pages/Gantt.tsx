@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  format, startOfWeek, addDays, addWeeks, subWeeks,
-  startOfMonth, endOfMonth, addMonths, subMonths,
+  format, addDays,
   differenceInMinutes, differenceInDays, startOfDay,
 } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { ChevronLeft, ChevronRight, ChevronDown, ChevronRight as ChevronRightSm, CalendarRange, Layers, GanttChartSquare } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronRight as ChevronRightSm, CalendarRange, Layers, GanttChartSquare, Gauge } from 'lucide-react'
 import { getGanttData } from '../api/gantt'
 import Loading from '../components/Loading'
+import CapacidadesPanel from '../components/CapacidadesPanel'
 
 type GanttOpDetalle = {
   docto: number
@@ -63,6 +63,7 @@ type GanttRecurso = {
 }
 
 type ViewMode = 'monthly' | 'weekly'
+type Tab = 'carga' | 'capacidades'
 
 const COLOR_ATRASADO = '#EF4444'
 const COLOR_RIESGO   = '#F59E0B'
@@ -92,6 +93,10 @@ const LABEL_COL_WIDTH = 280
 const MIN_DAY_WIDTH_WEEKLY = 120
 const MIN_DAY_WIDTH_MONTHLY = 56
 
+// Ventana rolling: el rango siempre arranca en `cursor` (= hoy por defecto).
+const DIAS_MENSUAL = 31
+const DIAS_SEMANAL = 7
+
 const fmtUnidades = (n: number): string => {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
@@ -101,8 +106,9 @@ const fmtUnidades = (n: number): string => {
 const fmtFecha = (s?: string | null) => s ? format(new Date(s), 'dd MMM yyyy', { locale: es }) : '—'
 
 export default function GanttPage() {
+  const [tab, setTab] = useState<Tab>('carga')
   const [viewMode, setViewMode] = useState<ViewMode>('monthly')
-  const [cursor, setCursor] = useState<Date>(() => new Date())
+  const [cursor, setCursor] = useState<Date>(() => startOfDay(new Date()))
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
   const toggleExpand = (id: number) => {
@@ -114,22 +120,13 @@ export default function GanttPage() {
   }
 
   const { rangeStart, rangeEnd, dias, minDayWidth } = useMemo(() => {
-    if (viewMode === 'monthly') {
-      const start = startOfMonth(cursor)
-      const end = endOfMonth(cursor)
-      return {
-        rangeStart: start,
-        rangeEnd: end,
-        dias: differenceInDays(end, start) + 1,
-        minDayWidth: MIN_DAY_WIDTH_MONTHLY,
-      }
-    }
-    const start = startOfWeek(cursor, { weekStartsOn: 1 })
+    const start = startOfDay(cursor)
+    const totalDias = viewMode === 'monthly' ? DIAS_MENSUAL : DIAS_SEMANAL
     return {
       rangeStart: start,
-      rangeEnd: addDays(start, 6),
-      dias: 7,
-      minDayWidth: MIN_DAY_WIDTH_WEEKLY,
+      rangeEnd: addDays(start, totalDias - 1),
+      dias: totalDias,
+      minDayWidth: viewMode === 'monthly' ? MIN_DAY_WIDTH_MONTHLY : MIN_DAY_WIDTH_WEEKLY,
     }
   }, [cursor, viewMode])
 
@@ -139,6 +136,7 @@ export default function GanttPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['gantt', viewMode, desde, hasta],
     queryFn: () => getGanttData({ desde, hasta }),
+    enabled: tab === 'carga',
   })
 
   const recursos: GanttRecurso[] = data?.recursos ?? []
@@ -169,15 +167,25 @@ export default function GanttPage() {
     return (mins / totalMins) * 100
   }, [rangeStart, dias])
 
-  const handlePrev = () => setCursor(c => viewMode === 'monthly' ? subMonths(c, 1) : subWeeks(c, 1))
-  const handleNext = () => setCursor(c => viewMode === 'monthly' ? addMonths(c, 1) : addWeeks(c, 1))
-  const handleToday = () => setCursor(new Date())
+  const today = useMemo(() => startOfDay(new Date()), [])
+  const blockSize = viewMode === 'monthly' ? DIAS_MENSUAL : DIAS_SEMANAL
+  const isAtToday = differenceInDays(cursor, today) <= 0
+
+  const handlePrev = () => {
+    if (isAtToday) return
+    setCursor(c => {
+      const candidate = addDays(c, -blockSize)
+      return candidate < today ? today : candidate
+    })
+  }
+  const handleNext = () => setCursor(c => addDays(c, blockSize))
+  const handleToday = () => setCursor(today)
 
   const headerLabel = viewMode === 'monthly'
-    ? format(rangeStart, 'MMMM yyyy', { locale: es })
-    : format(rangeStart, "'Semana del' dd 'de' MMMM", { locale: es })
+    ? `Próximos ${DIAS_MENSUAL} días`
+    : `Próximos ${DIAS_SEMANAL} días`
 
-  const headerSubLabel = `${format(rangeStart, 'dd/MM/yyyy', { locale: es })} – ${format(rangeEnd, 'dd/MM/yyyy', { locale: es })}`
+  const headerSubLabel = `${format(rangeStart, 'dd MMM yyyy', { locale: es })} – ${format(rangeEnd, 'dd MMM yyyy', { locale: es })}`
 
   const gridWidth = LABEL_COL_WIDTH + dias * minDayWidth
 
@@ -186,50 +194,85 @@ export default function GanttPage() {
       {/* Hero */}
       <div className="bg-gradient-to-br from-slate-800 via-blue-900 to-blue-800 px-6 pt-6 pb-10">
         <div className="max-w-full mx-auto">
-          <div className="flex items-start justify-between flex-wrap gap-4 mb-6">
+          <div className="flex items-start justify-between flex-wrap gap-4 mb-4">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <CalendarRange size={20} className="text-blue-300" />
-                <span className="text-blue-300 text-sm font-medium uppercase tracking-widest">Carga proyectada</span>
+                {tab === 'carga'
+                  ? <CalendarRange size={20} className="text-blue-300" />
+                  : <Gauge size={20} className="text-blue-300" />}
+                <span className="text-blue-300 text-sm font-medium uppercase tracking-widest">
+                  {tab === 'carga' ? 'Carga proyectada' : 'Ocupación de máquinas'}
+                </span>
               </div>
-              <h1 className="text-3xl font-bold text-white">Gantt por Centro de Trabajo</h1>
+              <h1 className="text-3xl font-bold text-white">
+                {tab === 'carga' ? 'Gantt por Centro de Trabajo' : 'Capacidades por Máquina'}
+              </h1>
               <p className="text-blue-200 text-sm mt-1">
-                Cada barra muestra los días hábiles necesarios, segmentados en atrasado, en riesgo y a tiempo.
+                {tab === 'carga'
+                  ? 'Cada barra muestra los días hábiles necesarios, segmentados en atrasado, en riesgo y a tiempo.'
+                  : 'Ocupación = unidades producidas (produccion + clase B) sobre capacidad teórica (cap/h × horas hábiles Lun-Vie).'}
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="inline-flex rounded-xl border border-white/20 overflow-hidden bg-white/5 backdrop-blur-sm">
+            {tab === 'carga' && (
+              <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-xl border border-white/20 overflow-hidden bg-white/5 backdrop-blur-sm">
+                  <button
+                    onClick={() => setViewMode('monthly')}
+                    className={`px-3 py-2 text-sm font-medium transition-all ${viewMode === 'monthly' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
+                  >
+                    Mensual
+                  </button>
+                  <button
+                    onClick={() => setViewMode('weekly')}
+                    className={`px-3 py-2 text-sm font-medium transition-all ${viewMode === 'weekly' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
+                  >
+                    Semanal
+                  </button>
+                </div>
                 <button
-                  onClick={() => setViewMode('monthly')}
-                  className={`px-3 py-2 text-sm font-medium transition-all ${viewMode === 'monthly' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
+                  onClick={handleToday}
+                  className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-xl border border-white/20 transition-all backdrop-blur-sm"
                 >
-                  Mensual
-                </button>
-                <button
-                  onClick={() => setViewMode('weekly')}
-                  className={`px-3 py-2 text-sm font-medium transition-all ${viewMode === 'weekly' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
-                >
-                  Semanal
+                  Hoy
                 </button>
               </div>
-              <button
-                onClick={handleToday}
-                className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-xl border border-white/20 transition-all backdrop-blur-sm"
-              >
-                Hoy
-              </button>
-            </div>
+            )}
           </div>
 
+          {/* Selector de pestañas */}
+          <div className="inline-flex rounded-xl border border-white/20 overflow-hidden bg-white/5 backdrop-blur-sm mb-6">
+            <button
+              onClick={() => setTab('carga')}
+              className={`px-4 py-2 text-sm font-semibold transition-all flex items-center gap-2 ${tab === 'carga' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
+            >
+              <CalendarRange size={16} />
+              Carga
+            </button>
+            <button
+              onClick={() => setTab('capacidades')}
+              className={`px-4 py-2 text-sm font-semibold transition-all flex items-center gap-2 ${tab === 'capacidades' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
+            >
+              <Gauge size={16} />
+              Capacidades
+            </button>
+          </div>
+
+          {tab === 'carga' && (
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={handlePrev}
-              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-all"
+              disabled={isAtToday}
+              title={isAtToday ? 'Ya estás en el bloque actual' : 'Bloque anterior'}
+              className={`p-2 rounded-xl border transition-all ${
+                isAtToday
+                  ? 'bg-white/5 text-white/30 border-white/10 cursor-not-allowed'
+                  : 'bg-white/10 hover:bg-white/20 text-white border-white/20'
+              }`}
             >
               <ChevronLeft size={18} />
             </button>
             <div className="text-center px-6 py-3 bg-white/10 backdrop-blur-sm rounded-2xl border border-white/20 min-w-[260px]">
-              <p className="text-white font-semibold text-lg capitalize">{headerLabel}</p>
+              <p className="text-white font-semibold text-lg">{headerLabel}</p>
               <p className="text-blue-200 text-xs mt-0.5">{headerSubLabel}</p>
             </div>
             <button
@@ -239,10 +282,16 @@ export default function GanttPage() {
               <ChevronRight size={18} />
             </button>
           </div>
+          )}
         </div>
       </div>
 
       <div className="px-6 -mt-5 pb-10 max-w-full mx-auto space-y-6">
+        {tab === 'capacidades' && (
+          <CapacidadesPanel cursorInicial={cursor} />
+        )}
+        {tab === 'carga' && (<>
+
 
         {isLoading && <Loading label="Calculando carga..." />}
 
@@ -397,7 +446,7 @@ export default function GanttPage() {
                           })}
 
                           {/* Línea vertical de "hoy" */}
-                          {todayLeftPct !== null && (
+                          {todayLeftPct !== null && todayLeftPct > 0.5 && (
                             <div
                               className="absolute top-0 bottom-0 w-[2px] bg-blue-600 z-[6] pointer-events-none"
                               style={{ left: `${todayLeftPct}%` }}
@@ -536,6 +585,7 @@ export default function GanttPage() {
             </div>
           </div>
         )}
+        </>)}
       </div>
     </div>
   )

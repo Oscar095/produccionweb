@@ -1,12 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { getKPIs, getEquipmentAvailability, getEquipmentEfficiency, getEquipmentQuality, getEquipmentOEE } from '../api/production'
 import { getTicketsActivos } from '../api/maintenance'
-import { getCapacidad } from '../api/planning'
 import { getMetas } from '../api/config'
 import {
-  AlertTriangle, CheckCircle, Clock, AlertCircle, Activity,
-  LayoutDashboard, Gauge, Factory, Zap, Target, ShieldCheck, Layers,
+  AlertTriangle, LayoutDashboard, Gauge, Factory, Zap, Target, ShieldCheck, Layers,
 } from 'lucide-react'
 
 // ── KPI Card (matches Reports.tsx aesthetic) ─────────────────────────────────
@@ -47,7 +44,6 @@ function KpiCard({
 export default function Dashboard() {
   const { data: kpis } = useQuery({ queryKey: ['kpis'], queryFn: getKPIs, refetchInterval: 300_000 })
   const { data: activos } = useQuery({ queryKey: ['tickets-activos'], queryFn: getTicketsActivos, refetchInterval: 60_000 })
-  const { data: capacidades } = useQuery({ queryKey: ['capacidad'], queryFn: () => getCapacidad(), refetchInterval: 300_000 })
   const { data: disp } = useQuery({ queryKey: ['equipment-availability'], queryFn: getEquipmentAvailability, refetchInterval: 300_000 })
   const { data: efic } = useQuery({ queryKey: ['equipment-efficiency'], queryFn: getEquipmentEfficiency, refetchInterval: 300_000 })
   const { data: qual } = useQuery({ queryKey: ['equipment-quality'], queryFn: getEquipmentQuality, refetchInterval: 300_000 })
@@ -116,34 +112,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── KPI cards ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-4">
-          <KpiCard
-            icon={<CheckCircle size={22} className="text-emerald-600" />}
-            label="Completadas"
-            value={kpis?.completadas ?? '—'}
-            sub={kpis ? `${kpis.pct_completado}% del total` : undefined}
-            accent="bg-emerald-100"
-          />
-          <KpiCard
-            icon={<Activity size={22} className="text-blue-600" />}
-            label="En Proceso"
-            value={kpis?.en_proceso ?? '—'}
-            accent="bg-blue-100"
-          />
-          <KpiCard
-            icon={<Clock size={22} className="text-indigo-600" />}
-            label="Pendientes"
-            value={kpis?.pendientes ?? '—'}
-            accent="bg-indigo-100"
-          />
-          <KpiCard
-            icon={<AlertCircle size={22} className="text-amber-600" />}
-            label="Sin Asignar"
-            value={kpis?.sin_asignar ?? '—'}
-            sub="requieren asignación"
-            accent="bg-amber-100"
-          />
+        {/* ── KPI cards de planta ── */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiCard
             icon={<Target size={22} className="text-violet-600" />}
             label="Tasa de Servicio"
@@ -219,120 +189,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Capacidad por máquina ── */}
-        {capacidades && capacidades.length > 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <Gauge size={15} className="text-slate-400" />
-              <span className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
-                Capacidad esta semana por máquina
-              </span>
-            </div>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={capacidades} margin={{ left: 0, right: 10 }}>
-                <XAxis dataKey="maquina_nombre" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis tickFormatter={v => `${v}h`} tick={{ fontSize: 11, fill: '#64748b' }} />
-                <Tooltip
-                  formatter={(val: unknown) => [`${(val as number).toFixed(1)}h`]}
-                  contentStyle={{
-                    borderRadius: '12px',
-                    border: '1px solid #e2e8f0',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                    fontSize: '12px',
-                  }}
-                />
-                <Bar dataKey="horas_disponibles_semana" name="Disponible" fill="#BFDBFE" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="horas_asignadas" name="Asignada" radius={[6, 6, 0, 0]}>
-                  {capacidades.map((entry: { sobrecargada: boolean }, i: number) => (
-                    <Cell key={i} fill={entry.sobrecargada ? '#F43F5E' : '#2563EB'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-            <div className="flex items-center gap-4 mt-3 pt-3 border-t border-slate-100">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-blue-200" />
-                <span className="text-xs text-slate-500">Disponible</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-blue-600" />
-                <span className="text-xs text-slate-500">Dentro de capacidad</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-rose-500" />
-                <span className="text-xs text-slate-500">Sobrecarga</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center">
-            <Gauge size={40} className="mx-auto text-slate-200 mb-3" />
-            <p className="text-slate-400 font-medium">Sin datos de capacidad disponibles.</p>
-            <p className="text-slate-300 text-sm mt-1">Los datos aparecerán cuando haya asignaciones esta semana.</p>
-          </div>
-        )}
-
-        {/* ── Eficiencia de equipos por máquina ── */}
-        {efic && efic.por_maquina && efic.por_maquina.length > 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <Zap size={15} className="text-slate-400" />
-              <span className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
-                Eficiencia de equipos por máquina
-              </span>
-              <span className="ml-auto text-xs text-slate-400">
-                producción real vs. capacidad teórica · mes en curso
-              </span>
-            </div>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={efic.por_maquina} margin={{ left: 0, right: 10 }}>
-                <XAxis dataKey="maquina_nombre" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#64748b' }} />
-                <Tooltip
-                  formatter={(val: unknown) => [`${(val as number).toFixed(1)}%`, 'Eficiencia']}
-                  contentStyle={{
-                    borderRadius: '12px',
-                    border: '1px solid #e2e8f0',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                    fontSize: '12px',
-                  }}
-                />
-                <Bar dataKey="eficiencia_pct" name="Eficiencia" radius={[6, 6, 0, 0]}>
-                  {efic.por_maquina.map((entry: { eficiencia_pct: number }, i: number) => (
-                    <Cell
-                      key={i}
-                      fill={
-                        entry.eficiencia_pct < 50 ? '#F43F5E'
-                          : entry.eficiencia_pct < 75 ? '#F59E0B'
-                          : '#10B981'
-                      }
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-            <div className="flex items-center gap-4 mt-3 pt-3 border-t border-slate-100">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-rose-500" />
-                <span className="text-xs text-slate-500">Baja (&lt;50%)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-amber-500" />
-                <span className="text-xs text-slate-500">Media (50–75%)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-emerald-500" />
-                <span className="text-xs text-slate-500">Buena (&gt;75%)</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center">
-            <Zap size={40} className="mx-auto text-slate-200 mb-3" />
-            <p className="text-slate-400 font-medium">Sin datos de eficiencia disponibles.</p>
-            <p className="text-slate-300 text-sm mt-1">Los datos aparecerán cuando haya registros de producción este mes.</p>
-          </div>
-        )}
       </div>
     </div>
   )

@@ -50,6 +50,7 @@ class MaquinaCreate(BaseModel):
     centro_costos_id: int
     estado_id: int
     rutas_siesa_id: Optional[int] = None
+    calcula_capacidad: bool = True
 
 
 class MaquinaUpdate(BaseModel):
@@ -58,6 +59,7 @@ class MaquinaUpdate(BaseModel):
     centro_costos_id: Optional[int] = None
     estado_id: Optional[int] = None
     rutas_siesa_id: Optional[int] = None
+    calcula_capacidad: Optional[bool] = None
 
 
 class MaquinaOut(BaseModel):
@@ -70,6 +72,7 @@ class MaquinaOut(BaseModel):
     estado_descripcion: Optional[str] = None
     rutas_siesa_id: Optional[int] = None
     rutas_siesa_nombre: Optional[str] = None
+    calcula_capacidad: bool = True
 
     model_config = {"from_attributes": True}
 

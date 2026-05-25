@@ -32,6 +32,7 @@ class Maquina(Base):
     estado           = Column(Integer, ForeignKey("dbo.estados_maquinas.Id"), nullable=False)
     rutas_siesa      = Column(Text)
     rutas_siesa_id   = Column(Integer, ForeignKey("planeacion.rutas_siesa.id"), nullable=True)
+    calcula_capacidad = Column(Boolean, nullable=False, default=True)
 
     centro_costos      = relationship("CentroCostos", back_populates="maquinas")
     estado_obj         = relationship("EstadoMaquina")

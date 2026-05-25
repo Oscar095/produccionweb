@@ -21,6 +21,7 @@ type Maquina = {
   estado_descripcion: string | null
   rutas_siesa_id: number | null
   rutas_siesa_nombre: string | null
+  calcula_capacidad: boolean
 }
 type CentroCostos = { id: number; centro: string }
 type EstadoMaquina = { id: number; estado_descripcion: string }
@@ -59,9 +60,9 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 // ─── Form de máquina ─────────────────────────────────────────────────────────
-type MaquinaForm = { nombre: string; capacidad_hora: string; centro_costos_id: string; estado_id: string; rutas_siesa_id: string }
+type MaquinaForm = { nombre: string; capacidad_hora: string; centro_costos_id: string; estado_id: string; rutas_siesa_id: string; calcula_capacidad: boolean }
 
-const EMPTY_MAQUINA_FORM: MaquinaForm = { nombre: '', capacidad_hora: '', centro_costos_id: '', estado_id: '', rutas_siesa_id: '' }
+const EMPTY_MAQUINA_FORM: MaquinaForm = { nombre: '', capacidad_hora: '', centro_costos_id: '', estado_id: '', rutas_siesa_id: '', calcula_capacidad: true }
 
 function MaquinaFormFields({
   form, onChange, centros, estados, rutas,
@@ -101,6 +102,15 @@ function MaquinaFormFields({
           {rutas.filter(r => r.activo).map(r => <option key={r.id} value={r.id}>{r.nombre_ruta}</option>)}
         </select>
       </Field>
+      <label className="flex items-center gap-2 cursor-pointer select-none pt-1">
+        <input
+          type="checkbox"
+          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500"
+          checked={form.calcula_capacidad}
+          onChange={e => onChange({ ...form, calcula_capacidad: e.target.checked })}
+        />
+        <span className="text-sm font-medium text-slate-600">Calcula capacidad</span>
+      </label>
     </>
   )
 }
@@ -141,6 +151,7 @@ function TabMaquinas() {
       centro_costos_id: String(m.centro_costos_id),
       estado_id: String(m.estado_id),
       rutas_siesa_id: m.rutas_siesa_id ? String(m.rutas_siesa_id) : '',
+      calcula_capacidad: m.calcula_capacidad ?? true,
     })
     setModal('editar')
   }
@@ -154,6 +165,7 @@ function TabMaquinas() {
       centro_costos_id: Number(form.centro_costos_id),
       estado_id: Number(form.estado_id),
       rutas_siesa_id: form.rutas_siesa_id ? Number(form.rutas_siesa_id) : null,
+      calcula_capacidad: form.calcula_capacidad,
     })
   }
 
@@ -167,6 +179,7 @@ function TabMaquinas() {
         centro_costos_id: form.centro_costos_id ? Number(form.centro_costos_id) : undefined,
         estado_id: form.estado_id ? Number(form.estado_id) : undefined,
         rutas_siesa_id: form.rutas_siesa_id ? Number(form.rutas_siesa_id) : null,
+        calcula_capacidad: form.calcula_capacidad,
       },
     })
   }
@@ -224,6 +237,7 @@ function TabMaquinas() {
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Centro de Costos</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Estado</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Ruta SIESA</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Calcula Cap.</th>
                   {permiso.editar && <th className="px-4 py-3" />}
                 </tr>
               </thead>
@@ -254,6 +268,11 @@ function TabMaquinas() {
                     </td>
                     <td className="px-4 py-3 text-slate-500 text-xs">
                       {m.rutas_siesa_nombre ?? <span className="text-slate-400 italic">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${m.calcula_capacidad ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                        {m.calcula_capacidad ? 'Sí' : 'No'}
+                      </span>
                     </td>
                     {permiso.editar && (
                       <td className="px-4 py-3 text-right">

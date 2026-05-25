@@ -18,7 +18,7 @@ from models.planning import (
     Rol, RolPermiso, RutaSiesa, KanbanPrioridad, KanbanCheck, MetaKPI,
 )
 
-from routers import auth, gantt, production, maintenance, planning, reports, roles, config, koski_ia
+from routers import auth, gantt, production, maintenance, planning, reports, roles, config, koski_ia, indicadores
 
 app = FastAPI(
     title="KOS Xpress — Planeación de Producción",
@@ -47,6 +47,7 @@ app.include_router(reports.router)
 app.include_router(roles.router)
 app.include_router(config.router)
 app.include_router(koski_ia.router)
+app.include_router(indicadores.router)
 
 
 @app.on_event("startup")
@@ -114,6 +115,25 @@ def startup():
     except Exception as e:
         print(f"[startup] ERROR migrando 'orden' en rutas_siesa: {e}")
 
+    # Migración idempotente: agregar calcula_capacidad a dbo.maquinas
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                IF NOT EXISTS (
+                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = 'dbo'
+                      AND TABLE_NAME   = 'maquinas'
+                      AND COLUMN_NAME  = 'calcula_capacidad'
+                )
+                BEGIN
+                    EXEC('ALTER TABLE dbo.maquinas ADD calcula_capacidad BIT NOT NULL CONSTRAINT DF_maquinas_calcula_capacidad DEFAULT 1');
+                END
+            """))
+            conn.commit()
+            print("[startup] migración 'calcula_capacidad' en maquinas OK")
+    except Exception as e:
+        print(f"[startup] ERROR migrando 'calcula_capacidad' en maquinas: {e}")
+
     # Seed idempotente: garantiza que cada rol tenga al menos puede_ver=True para
     # módulos nuevos (koski_ia). No sobreescribe permisos ya configurados.
     try:
@@ -162,6 +182,28 @@ def startup():
                     print("[startup] seed permiso cerrar_op para Administrador OK")
     except Exception as e:
         print(f"[startup] ERROR sembrando permiso cerrar_op: {e}")
+
+    # Seed idempotente del permiso indicadores SOLO para el rol Administrador.
+    # Los demás roles deben configurarlo manualmente desde la UI de Roles.
+    try:
+        from database import SessionLocal
+        with SessionLocal() as session:
+            admin = session.query(Rol).filter(Rol.nombre == "Administrador").first()
+            if admin:
+                modulos_admin = {p.modulo for p in admin.permisos}
+                if "indicadores" not in modulos_admin:
+                    session.add(RolPermiso(
+                        rol_id=admin.id,
+                        modulo="indicadores",
+                        puede_ver=True,
+                        puede_crear=True,
+                        puede_editar=True,
+                        puede_eliminar=True,
+                    ))
+                    session.commit()
+                    print("[startup] seed permiso indicadores para Administrador OK")
+    except Exception as e:
+        print(f"[startup] ERROR sembrando permiso indicadores: {e}")
 
 
 @app.get("/health", tags=["health"])

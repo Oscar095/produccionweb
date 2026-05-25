@@ -4,7 +4,7 @@ import { useAuthStore } from '../store/auth'
 import {
   LayoutDashboard, GitBranch,
   Wrench, FileText, LogOut, Users, PackageSearch,
-  Menu, X, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Settings, Bot,
+  Menu, X, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Settings, Bot, BarChart3,
 } from 'lucide-react'
 import PlanningLogo from './PlanningLogo'
 
@@ -15,6 +15,7 @@ const NAV = [
   { to: '/maintenance',    label: 'Mantenimiento',           Icon: Wrench,          modulo: 'mantenimiento' },
   { to: '/planning',       label: 'Planeación',              Icon: PlanningLogo,    modulo: 'planeacion' },
   { to: '/reports',        label: 'Reportes',                Icon: FileText,        modulo: 'reportes' },
+  { to: '/indicadores',    label: 'Indicadores',             Icon: BarChart3,       modulo: 'indicadores' },
   { to: '/chat',           label: 'Koski IA',                Icon: Bot,             modulo: 'koski_ia' },
   { to: '/usuarios',       label: 'Usuarios',                Icon: Users,           modulo: 'usuarios' },
   { to: '/configuracion',  label: 'Configuración',           Icon: Settings,        modulo: 'configuracion' },

@@ -9,6 +9,7 @@ from auth import get_current_user, require_roles
 from models.production import OpNumero, RegistroProduccion, Maquina, CentroCostos, PersonalPlanta
 from models.maintenance import SolicitudMantenimiento
 from models.planning import Asignacion
+from services.working_hours import operative_hours_between
 from schemas.production import (
     OpNumeroOut, KPIProduccionOut, MaquinaOut, CentroCostosOut,
     RegistroProduccionCreate, RegistroProduccionOut, PersonalPlantaOut,
@@ -172,93 +173,25 @@ def get_kpis(db: Session = Depends(get_db), _=Depends(get_current_user)):
 @router.get("/equipment-availability", response_model=EquipmentAvailabilityOut)
 def get_equipment_availability(db: Session = Depends(get_db), _=Depends(get_current_user)):
     """
-    Disponibilidad por máquina = (24*días_trabajados − horas_parada) / (24*días_trabajados)
-    Período: mes en curso (día 1 → hoy).
-    Horas de parada: tickets de dbo.solicitudes_mantenimiento cuya fecha de
-    INICIO cae dentro del mes. Se descartan los tickets arrastrados de meses
-    anteriores (frecuentemente mal cerrados en AppSheet, que inflaban la
-    parada con cientos de horas falsas). Tickets aún abiertos se cuentan
-    hasta NOW. Las horas que caen en domingo NO cuentan (la planta no opera
-    los domingos) — ver _horas_habiles().
+    Disponibilidad por máquina = (horas_hábiles − horas_parada) / horas_hábiles
+    Período: mes en curso (día 1 → hoy). Las horas hábiles son las horas L-V
+    transcurridas del mes (planta opera 24h L-V, sábado y domingo se excluyen).
+    Esto da la MISMA base horaria a todas las máquinas; la diferencia entre
+    máquinas viene solo de los tickets de mantenimiento.
     """
+    from services.indicadores_service import compute_disponibilidad
+
     hoy = datetime.now()
     primer_dia = datetime(hoy.year, hoy.month, 1)
-
-    dias_por_maquina = dict(
-        db.query(
-            RegistroProduccion.maquina,
-            func.count(func.distinct(cast(RegistroProduccion.fecha, Date))),
-        )
-        .filter(RegistroProduccion.fecha >= primer_dia, RegistroProduccion.fecha <= hoy)
-        .group_by(RegistroProduccion.maquina)
-        .all()
-    )
-
-    tickets = (
-        db.query(
-            SolicitudMantenimiento.row_maquina,
-            SolicitudMantenimiento.fecha,
-            SolicitudMantenimiento.fecha_solucion,
-        )
-        .filter(
-            SolicitudMantenimiento.fecha >= primer_dia,
-            SolicitudMantenimiento.fecha <= hoy,
-        )
-        .all()
-    )
-
-    horas_parada_por_maquina: dict[int, float] = {}
-    for row_maquina, fecha_ini, fecha_fin in tickets:
-        if row_maquina is None or fecha_ini is None:
-            continue
-        # El ticket inició dentro del mes; si sigue abierto se cuenta hasta ahora.
-        fin = min(fecha_fin or hoy, hoy)
-        if fin <= fecha_ini:
-            continue
-        horas = _horas_habiles(fecha_ini, fin)  # descuenta domingos
-        horas_parada_por_maquina[row_maquina] = horas_parada_por_maquina.get(row_maquina, 0.0) + horas
-
-    maquina_ids = set(dias_por_maquina.keys()) | set(horas_parada_por_maquina.keys())
-    nombres = {
-        m.Id: m.nombre
-        for m in db.query(Maquina.Id, Maquina.nombre).filter(Maquina.Id.in_(maquina_ids)).all()
-    } if maquina_ids else {}
-
-    por_maquina: list[MaquinaAvailabilityOut] = []
-    horas_disp_total = 0.0
-    horas_parada_total = 0.0
-    maquinas_evaluadas = 0
-
-    for mid, dias in dias_por_maquina.items():
-        if dias <= 0:
-            continue
-        horas_disp = 24.0 * dias
-        horas_parada = min(horas_parada_por_maquina.get(mid, 0.0), horas_disp)
-        disp_pct = round(max(0.0, (horas_disp - horas_parada) / horas_disp) * 100, 1)
-        por_maquina.append(MaquinaAvailabilityOut(
-            maquina_id=mid,
-            maquina_nombre=nombres.get(mid),
-            dias_trabajados=dias,
-            horas_disponibles=round(horas_disp, 1),
-            horas_parada=round(horas_parada, 1),
-            disponibilidad_pct=disp_pct,
-        ))
-        horas_disp_total += horas_disp
-        horas_parada_total += horas_parada
-        maquinas_evaluadas += 1
-
-    por_maquina.sort(key=lambda x: x.disponibilidad_pct)
-
-    disponibilidad_global = (
-        round((horas_disp_total - horas_parada_total) / horas_disp_total * 100, 1)
-        if horas_disp_total > 0 else 100.0
+    valor_global, por_maquina, horas_disp_total, horas_parada_total = compute_disponibilidad(
+        db, primer_dia, hoy, maquina_id=None
     )
 
     return EquipmentAvailabilityOut(
-        disponibilidad_pct=disponibilidad_global,
+        disponibilidad_pct=valor_global,
         horas_disponibles_total=round(horas_disp_total, 1),
         horas_parada_total=round(horas_parada_total, 1),
-        maquinas_evaluadas=maquinas_evaluadas,
+        maquinas_evaluadas=len(por_maquina),
         periodo=PeriodoOut(inicio=primer_dia.date(), fin=hoy.date()),
         por_maquina=por_maquina,
     )
@@ -271,125 +204,25 @@ def get_equipment_efficiency(db: Session = Depends(get_db), _=Depends(get_curren
 
         producción real     = SUM(produccion + clase_b + desecho)  (throughput total)
         producción teórica  = capacidad_hora × horas_operativas
-        horas_operativas    = 24h × días_trabajados − horas_parada_mantenimiento
+        horas_operativas    = horas_hábiles_mes − horas_parada_mantenimiento
 
-    Es el 2º pilar del OEE (el 1º es /equipment-availability). Período: mes en
-    curso (día 1 → hoy). Las horas de parada se calculan igual que en
-    Disponibilidad: tickets de dbo.solicitudes_mantenimiento cuya fecha de
-    INICIO cae en el mes, contando los abiertos hasta NOW y descartando las
-    horas en domingo (ver _horas_habiles()).
-
-    LIMITACIÓN: registro_produccion no guarda hora de fin ni duración, así que
-    horas_operativas se estima con la convención del sistema (24h/día). Una
-    máquina que operó pocos turnos por falta de trabajo (no por avería)
-    mostrará eficiencia baja; el indicador mezcla velocidad y utilización de
-    turnos. Un valor >100% indica que capacidad_hora está subestimada en
-    dbo.maquinas — no se hace cap a propósito para que esa señal sea visible.
+    horas_hábiles_mes son las horas L-V transcurridas del mes (planta opera
+    24h L-V). Se aplica la MISMA base horaria a todas las máquinas, por lo
+    que la diferencia entre máquinas solo proviene de su throughput real y
+    sus paradas registradas.
     """
+    from services.indicadores_service import compute_eficiencia
+
     hoy = datetime.now()
     primer_dia = datetime(hoy.year, hoy.month, 1)
-
-    # Días trabajados por máquina (mismo criterio que Disponibilidad).
-    dias_por_maquina = dict(
-        db.query(
-            RegistroProduccion.maquina,
-            func.count(func.distinct(cast(RegistroProduccion.fecha, Date))),
-        )
-        .filter(RegistroProduccion.fecha >= primer_dia, RegistroProduccion.fecha <= hoy)
-        .group_by(RegistroProduccion.maquina)
-        .all()
-    )
-
-    # Throughput total producido por máquina en el mes.
-    prod_por_maquina = dict(
-        db.query(
-            RegistroProduccion.maquina,
-            func.sum(
-                func.coalesce(RegistroProduccion.produccion, 0)
-                + func.coalesce(RegistroProduccion.clase_b, 0)
-                + func.coalesce(RegistroProduccion.desecho, 0)
-            ),
-        )
-        .filter(RegistroProduccion.fecha >= primer_dia, RegistroProduccion.fecha <= hoy)
-        .group_by(RegistroProduccion.maquina)
-        .all()
-    )
-
-    # Horas de parada por mantenimiento (mismo bloque que Disponibilidad).
-    tickets = (
-        db.query(
-            SolicitudMantenimiento.row_maquina,
-            SolicitudMantenimiento.fecha,
-            SolicitudMantenimiento.fecha_solucion,
-        )
-        .filter(
-            SolicitudMantenimiento.fecha >= primer_dia,
-            SolicitudMantenimiento.fecha <= hoy,
-        )
-        .all()
-    )
-
-    horas_parada_por_maquina: dict[int, float] = {}
-    for row_maquina, fecha_ini, fecha_fin in tickets:
-        if row_maquina is None or fecha_ini is None:
-            continue
-        fin = min(fecha_fin or hoy, hoy)
-        if fin <= fecha_ini:
-            continue
-        horas = _horas_habiles(fecha_ini, fin)  # descuenta domingos
-        horas_parada_por_maquina[row_maquina] = horas_parada_por_maquina.get(row_maquina, 0.0) + horas
-
-    # Capacidad nominal por máquina.
-    maquinas = {
-        m.Id: m
-        for m in db.query(Maquina.Id, Maquina.nombre, Maquina.capacidad_hora)
-        .filter(Maquina.Id.in_(dias_por_maquina.keys()))
-        .all()
-    } if dias_por_maquina else {}
-
-    por_maquina: list[MaquinaEficienciaOut] = []
-    produccion_real_total = 0
-    produccion_teorica_total = 0.0
-
-    for mid, dias in dias_por_maquina.items():
-        if dias <= 0:
-            continue
-        maq = maquinas.get(mid)
-        cap = (maq.capacidad_hora if maq else 0) or 0
-        if cap <= 0:
-            continue  # sin capacidad nominal no se puede medir eficiencia
-        horas_disp = 24.0 * dias
-        horas_parada = min(horas_parada_por_maquina.get(mid, 0.0), horas_disp)
-        horas_operativas = max(horas_disp - horas_parada, 0.0)
-        if horas_operativas <= 0:
-            continue
-        prod_teorica = cap * horas_operativas
-        prod_real = int(prod_por_maquina.get(mid, 0) or 0)
-        ef_pct = round(prod_real / prod_teorica * 100, 1) if prod_teorica > 0 else 0.0
-        por_maquina.append(MaquinaEficienciaOut(
-            maquina_id=mid,
-            maquina_nombre=maq.nombre if maq else None,
-            dias_trabajados=dias,
-            horas_operativas=round(horas_operativas, 1),
-            capacidad_hora=cap,
-            produccion_real=prod_real,
-            produccion_teorica=round(prod_teorica, 1),
-            eficiencia_pct=ef_pct,
-        ))
-        produccion_real_total += prod_real
-        produccion_teorica_total += prod_teorica
-
-    por_maquina.sort(key=lambda x: x.eficiencia_pct)
-
-    eficiencia_global = (
-        round(produccion_real_total / produccion_teorica_total * 100, 1)
-        if produccion_teorica_total > 0 else 0.0
+    valor_global, por_maquina, prod_real_total, prod_teorica_total = compute_eficiencia(
+        db, primer_dia, hoy, maquina_id=None
     )
 
     return EquipmentEfficiencyOut(
-        eficiencia_pct=eficiencia_global,
-        produccion_real_total=produccion_real_total,
-        produccion_teorica_total=round(produccion_teorica_total, 1),
+        eficiencia_pct=valor_global,
+        produccion_real_total=prod_real_total,
+        produccion_teorica_total=round(prod_teorica_total, 1),
         maquinas_evaluadas=len(por_maquina),
         periodo=PeriodoOut(inicio=primer_dia.date(), fin=hoy.date()),
         por_maquina=por_maquina,
@@ -405,66 +238,18 @@ def get_equipment_quality(db: Session = Depends(get_db), _=Depends(get_current_u
         producción total  = SUM(produccion + clase_b + desecho)
 
     Es el 3er pilar del OEE (Disponibilidad × Rendimiento × Calidad). Período:
-    mes en curso (día 1 → hoy). Mide qué fracción del throughput salió como
-    producto de primera; las unidades clase B y de desecho restan calidad. Solo
-    se basa en dbo.registro_produccion, no usa días ni paradas.
+    mes en curso (día 1 → hoy). Solo se basa en dbo.registro_produccion.
     """
+    from services.indicadores_service import compute_calidad
+
     hoy = datetime.now()
     primer_dia = datetime(hoy.year, hoy.month, 1)
-
-    rows = (
-        db.query(
-            RegistroProduccion.maquina,
-            func.sum(func.coalesce(RegistroProduccion.produccion, 0)),
-            func.sum(func.coalesce(RegistroProduccion.clase_b, 0)),
-            func.sum(func.coalesce(RegistroProduccion.desecho, 0)),
-        )
-        .filter(RegistroProduccion.fecha >= primer_dia, RegistroProduccion.fecha <= hoy)
-        .group_by(RegistroProduccion.maquina)
-        .all()
-    )
-
-    maquina_ids = [r[0] for r in rows if r[0] is not None]
-    nombres = {
-        m.Id: m.nombre
-        for m in db.query(Maquina.Id, Maquina.nombre).filter(Maquina.Id.in_(maquina_ids)).all()
-    } if maquina_ids else {}
-
-    por_maquina: list[MaquinaCalidadOut] = []
-    buena_total = 0
-    produccion_total = 0
-
-    for mid, buena, clase_b, desecho in rows:
-        if mid is None:
-            continue
-        buena = int(buena or 0)
-        clase_b = int(clase_b or 0)
-        desecho = int(desecho or 0)
-        total = buena + clase_b + desecho
-        if total <= 0:
-            continue
-        calidad_pct = round(buena / total * 100, 1)
-        por_maquina.append(MaquinaCalidadOut(
-            maquina_id=mid,
-            maquina_nombre=nombres.get(mid),
-            produccion_buena=buena,
-            clase_b=clase_b,
-            desecho=desecho,
-            produccion_total=total,
-            calidad_pct=calidad_pct,
-        ))
-        buena_total += buena
-        produccion_total += total
-
-    por_maquina.sort(key=lambda x: x.calidad_pct)
-
-    calidad_global = (
-        round(buena_total / produccion_total * 100, 1)
-        if produccion_total > 0 else 0.0
+    valor_global, por_maquina, buena_total, produccion_total = compute_calidad(
+        db, primer_dia, hoy, maquina_id=None
     )
 
     return EquipmentQualityOut(
-        calidad_pct=calidad_global,
+        calidad_pct=valor_global,
         produccion_buena_total=buena_total,
         produccion_total=produccion_total,
         maquinas_evaluadas=len(por_maquina),

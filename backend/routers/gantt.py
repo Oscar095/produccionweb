@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user
-from services.gantt_service import get_gantt_data
-from schemas.gantt import GanttDataOut
+from services.gantt_service import get_gantt_data, get_capacidades_data
+from schemas.gantt import GanttDataOut, CapacidadesDataOut
 
 router = APIRouter(prefix="/api/gantt", tags=["gantt"])
 
@@ -33,3 +33,18 @@ def gantt(
             maquina_ids = None
 
     return get_gantt_data(db, desde, hasta, maquina_ids)
+
+
+@router.get("/capacidades", response_model=CapacidadesDataOut)
+def capacidades(
+    desde: datetime = Query(..., description="Fecha inicio (ISO)"),
+    hasta: datetime = Query(..., description="Fecha fin (ISO)"),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """
+    Ocupación por máquina en el período: unidades producidas (produccion + clase_b)
+    vs. capacidad teórica (capacidad_hora × horas operativas Lun-Vie).
+    Incluye tendencia mensual de los últimos 12 meses.
+    """
+    return get_capacidades_data(db, desde, hasta)
