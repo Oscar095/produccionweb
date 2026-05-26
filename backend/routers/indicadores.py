@@ -26,8 +26,9 @@ from schemas.indicadores import (
     IndicadorOut, PeriodoIndicadorOut, SemanaValorOut, MaquinaValorOut,
 )
 from services.indicadores_service import (
-    compute_tasa_servicio, compute_disponibilidad,
-    compute_eficiencia, compute_calidad, iter_semanas_mes,
+    compute_tasa_servicio, compute_tasa_servicio_por_maquina,
+    compute_disponibilidad, compute_eficiencia, compute_calidad,
+    iter_semanas_mes,
 )
 
 router = APIRouter(prefix="/api/indicadores", tags=["indicadores"])
@@ -37,7 +38,7 @@ _KPI_TO_META = {
     "tasa_servicio": "tasa_servicio",
     "disponibilidad": "disponibilidad",
     "eficiencia": "eficiencia",
-    "calidad": None,  # Calidad no tiene meta sembrada por defecto
+    "calidad": "calidad",
 }
 
 _MESES_LARGO = [
@@ -69,13 +70,20 @@ def _meta_para(db: Session, kpi: str) -> Optional[float]:
     return float(row.valor) if row else None
 
 
-def _bounds_mes(year: int, month: int) -> tuple[datetime, datetime]:
-    """Inicio del mes (00:00:00) y fin acotado a hoy si el mes es el actual."""
+def _bounds_mes(year: int, month: int, acotar_a_hoy: bool = True) -> tuple[datetime, datetime]:
+    """
+    Inicio del mes (00:00:00) y fin del mes.
+    Con acotar_a_hoy=True (default): fin = min(último día, ahora) — para KPIs
+    basados en horas operativas (disponibilidad, eficiencia, calidad).
+    Con acotar_a_hoy=False: fin = último día 23:59:59 del mes completo — para
+    tasa_servicio que cuenta OPs por fecha de entrega comprometida.
+    """
     inicio = datetime(year, month, 1, 0, 0, 0)
     ultimo = monthrange(year, month)[1]
     fin_mes = datetime(year, month, ultimo, 23, 59, 59)
-    hoy = datetime.now()
-    fin = min(fin_mes, hoy)
+    if not acotar_a_hoy:
+        return inicio, fin_mes
+    fin = min(fin_mes, datetime.now())
     if fin < inicio:
         fin = inicio
     return inicio, fin
@@ -111,50 +119,123 @@ def _compute_por_maquina(
     fin: datetime,
 ) -> list[MaquinaValorOut]:
     """
-    Para un período dado, calcula el KPI por cada máquina y lo devuelve como
-    MaquinaValorOut (campos uniformes). Para tasa_servicio iteramos máquinas
-    porque la función agregada no produce desglose por máquina nativamente.
+    Calcula el KPI por cada máquina y devuelve MaquinaValorOut con campos
+    detallados según el KPI. Para tasa_servicio usa una query agrupada (sin N+1)
+    e incluye pseudo-máquina 'Sin asignar' si hay OPs no asignadas.
     """
     if kpi_internal == "disponibilidad":
         _, lista, _, _ = compute_disponibilidad(db, inicio, fin, None)
         return [
-            MaquinaValorOut(maquina_id=m.maquina_id, maquina_nombre=m.maquina_nombre, valor=m.disponibilidad_pct)
+            MaquinaValorOut(
+                maquina_id=m.maquina_id,
+                maquina_nombre=m.maquina_nombre,
+                valor=m.disponibilidad_pct,
+                dias_trabajados=m.dias_trabajados,
+                horas_disponibles=m.horas_disponibles,
+                horas_parada=m.horas_parada,
+            )
             for m in lista
         ]
+
     if kpi_internal == "eficiencia":
         _, lista, _, _ = compute_eficiencia(db, inicio, fin, None)
         return [
-            MaquinaValorOut(maquina_id=m.maquina_id, maquina_nombre=m.maquina_nombre, valor=m.eficiencia_pct)
+            MaquinaValorOut(
+                maquina_id=m.maquina_id,
+                maquina_nombre=m.maquina_nombre,
+                valor=m.eficiencia_pct,
+                dias_trabajados=m.dias_trabajados,
+                horas_operativas=m.horas_operativas,
+                capacidad_hora=m.capacidad_hora,
+                produccion_real=m.produccion_real,
+                produccion_teorica=m.produccion_teorica,
+            )
             for m in lista
         ]
+
     if kpi_internal == "calidad":
         _, lista, _, _ = compute_calidad(db, inicio, fin, None)
         return [
-            MaquinaValorOut(maquina_id=m.maquina_id, maquina_nombre=m.maquina_nombre, valor=m.calidad_pct)
+            MaquinaValorOut(
+                maquina_id=m.maquina_id,
+                maquina_nombre=m.maquina_nombre,
+                valor=m.calidad_pct,
+                produccion_buena=m.produccion_buena,
+                clase_b=m.clase_b,
+                desecho=m.desecho,
+                produccion_total=m.produccion_total,
+            )
             for m in lista
         ]
+
     if kpi_internal == "tasa_servicio":
-        # Iterar máquinas con asignaciones en el período
-        from models.production import Maquina
+        from models.production import Maquina, OpNumero
         from models.planning import Asignacion
-        ids = {
-            mid for (mid,) in db.query(Asignacion.maquina_id)
-            .filter(Asignacion.suspendida == False)
-            .distinct().all()
-            if mid is not None
-        }
-        if not ids:
-            return []
-        maquinas = db.query(Maquina).filter(Maquina.Id.in_(ids)).all()
+        from sqlalchemy import func
+
+        rows = compute_tasa_servicio_por_maquina(db, inicio, fin)
+        nombres = {
+            m.Id: m.nombre
+            for m in db.query(Maquina).filter(Maquina.Id.in_([r["maquina_id"] for r in rows])).all()
+        } if rows else {}
+
         out: list[MaquinaValorOut] = []
-        for m in maquinas:
-            valor, total, _ = compute_tasa_servicio(db, inicio, fin, m.Id)
-            if total == 0:
-                continue
-            out.append(MaquinaValorOut(maquina_id=m.Id, maquina_nombre=m.nombre, valor=valor))
+        for r in rows:
+            total = r["total"]
+            atrasadas = r["atrasadas"]
+            tasa = round((1 - atrasadas / total) * 100, 1) if total > 0 else 100.0
+            out.append(MaquinaValorOut(
+                maquina_id=r["maquina_id"],
+                maquina_nombre=nombres.get(r["maquina_id"]),
+                valor=tasa,
+                total_ops=total,
+                ops_atrasadas=atrasadas,
+            ))
+
+        # Pseudo-máquina "Sin asignar": OPs no asignadas a ninguna máquina vigente
+        inicio_d = inicio.date() if isinstance(inicio, datetime) else inicio
+        fin_d = fin.date() if isinstance(fin, datetime) else fin
+        hoy_d = datetime.now().date()
+
+        subq_asignadas = db.query(Asignacion.op_docto).filter(Asignacion.suspendida == False).subquery()
+
+        sin_total = db.query(func.count(OpNumero.Id)).filter(
+            OpNumero.f851_fecha_terminacion >= inicio_d,
+            OpNumero.f851_fecha_terminacion <= fin_d,
+            ~OpNumero.docto.in_(subq_asignadas),
+        ).scalar() or 0
+
+        sin_atrasadas = db.query(func.count(OpNumero.Id)).filter(
+            OpNumero.f851_fecha_terminacion >= inicio_d,
+            OpNumero.f851_fecha_terminacion <= fin_d,
+            OpNumero.f851_fecha_terminacion < hoy_d,
+            OpNumero.cant_consumida < OpNumero.cantidad,
+            ~OpNumero.docto.in_(subq_asignadas),
+        ).scalar() or 0
+
+        if sin_total > 0:
+            tasa_sin = round((1 - sin_atrasadas / sin_total) * 100, 1)
+            out.append(MaquinaValorOut(
+                maquina_id=0,
+                maquina_nombre="Sin asignar",
+                valor=tasa_sin,
+                total_ops=sin_total,
+                ops_atrasadas=sin_atrasadas,
+            ))
+
         out.sort(key=lambda x: x.valor)
         return out
+
     return []
+
+
+def _sem_estado(sem_ini: datetime, sem_fin: datetime) -> str:
+    hoy = datetime.now()
+    if sem_ini > hoy:
+        return "futura"
+    if sem_fin < hoy:
+        return "pasada"
+    return "en_curso"
 
 
 @router.get("/{kpi}", response_model=IndicadorOut)
@@ -171,7 +252,13 @@ def get_indicador(
         raise HTTPException(status_code=404, detail=f"KPI '{kpi}' no encontrado")
 
     year, month = _parse_mes(mes)
-    inicio, fin = _bounds_mes(year, month)
+
+    # tasa_servicio usa el mes completo (OPs futuras siguen siendo compromiso)
+    # los demás KPIs acotan a hoy para no extrapolar horas operativas futuras
+    if kpi_norm == "tasa_servicio":
+        inicio, fin = _bounds_mes(year, month, acotar_a_hoy=False)
+    else:
+        inicio, fin = _bounds_mes(year, month, acotar_a_hoy=True)
 
     valor_periodo = _compute_one(kpi_norm, db, inicio, fin, maquina_id)
 
@@ -180,19 +267,27 @@ def get_indicador(
     hoy = datetime.now()
     por_semana: list[SemanaValorOut] = []
     for sem_ini, sem_fin, label in semanas:
-        # Recortar futuro
-        sem_fin_efectivo = min(sem_fin, hoy)
-        if sem_fin_efectivo < sem_ini:
-            continue
-        valor = _compute_one(kpi_norm, db, sem_ini, sem_fin_efectivo, maquina_id)
+        estado = _sem_estado(sem_ini, sem_fin)
+
+        if kpi_norm == "tasa_servicio":
+            # Usar la semana completa para tasa (cuenta OPs por fecha, no horas)
+            valor = _compute_one(kpi_norm, db, sem_ini, sem_fin, maquina_id)
+        else:
+            # Recortar semanas futuras para KPIs basados en horas
+            sem_fin_efectivo = min(sem_fin, hoy)
+            if sem_fin_efectivo < sem_ini:
+                continue
+            valor = _compute_one(kpi_norm, db, sem_ini, sem_fin_efectivo, maquina_id)
+
         por_semana.append(SemanaValorOut(
             semana_label=label,
             inicio=sem_ini.date(),
             fin=sem_fin.date(),
             valor=valor,
+            estado=estado,
         ))
 
-    # Por máquina (global del mes, no se filtra por maquina_id porque queremos compararlas)
+    # Por máquina (global del mes, sin filtrar por maquina_id para comparar todas)
     por_maquina = _compute_por_maquina(kpi_norm, db, inicio, fin)
 
     return IndicadorOut(

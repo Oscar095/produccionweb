@@ -7,6 +7,8 @@ const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
 export type ChatRole = 'user' | 'model'
 
+export type ChatMode = 'fast' | 'deep'
+
 export interface ChatMessage {
   role: ChatRole
   content: string
@@ -22,6 +24,7 @@ export type ChatEvent =
 export interface StreamChatHandlers {
   onEvent: (ev: ChatEvent) => void
   signal?: AbortSignal
+  mode?: ChatMode
 }
 
 /**
@@ -30,7 +33,7 @@ export interface StreamChatHandlers {
  */
 export async function streamChat(
   messages: ChatMessage[],
-  { onEvent, signal }: StreamChatHandlers,
+  { onEvent, signal, mode = 'fast' }: StreamChatHandlers,
 ): Promise<void> {
   const token = localStorage.getItem('kos_token')
   const res = await fetch(`${BASE_URL}/api/chat/stream`, {
@@ -40,7 +43,7 @@ export async function streamChat(
       Accept: 'text/event-stream',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, mode }),
     signal,
   })
 
@@ -115,7 +118,10 @@ export async function streamChat(
 /**
  * Llamada no-streaming (fallback / uso programático).
  */
-export async function sendChat(messages: ChatMessage[]): Promise<{ text: string; tool_calls: string[] }> {
+export async function sendChat(
+  messages: ChatMessage[],
+  mode: ChatMode = 'fast',
+): Promise<{ text: string; tool_calls: string[] }> {
   const token = localStorage.getItem('kos_token')
   const res = await fetch(`${BASE_URL}/api/chat`, {
     method: 'POST',
@@ -123,7 +129,7 @@ export async function sendChat(messages: ChatMessage[]): Promise<{ text: string;
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, mode }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()

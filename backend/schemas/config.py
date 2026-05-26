@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class CentroCostosOut(BaseModel):
@@ -87,4 +87,4 @@ class MetaKPIOut(BaseModel):
 
 
 class MetaKPIUpdate(BaseModel):
-    valor: float
+    valor: float = Field(ge=0, le=100, description="Meta KPI en porcentaje (0–100)")

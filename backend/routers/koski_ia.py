@@ -30,7 +30,7 @@ def chat(
     current_user: Usuario = Depends(get_current_user),
 ):
     """Respuesta completa (no-streaming). Útil para pruebas en Swagger."""
-    result = run_chat(body.messages, db, current_user)
+    result = run_chat(body.messages, db, current_user, mode=body.mode or "fast")
     return ChatResponse(text=result["text"], tool_calls=result["tool_calls"])
 
 
@@ -48,7 +48,7 @@ async def chat_stream(
 
     async def event_generator():
         try:
-            async for event in stream_chat(body.messages, db, current_user):
+            async for event in stream_chat(body.messages, db, current_user, mode=body.mode or "fast"):
                 yield {"data": json.dumps(event, ensure_ascii=False)}
         except Exception as e:  # noqa: BLE001
             logger.exception("Error en chat_stream")

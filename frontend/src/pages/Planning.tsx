@@ -93,7 +93,11 @@ function SortableCard({
     clearHide()
     if (cardRef.current) {
       const rect = cardRef.current.getBoundingClientRect()
-      setPreviewPos({ top: rect.top, left: rect.right + 8 })
+      const previewWidth = 256 // w-64
+      const left = rect.right + previewWidth + 8 > window.innerWidth
+        ? rect.left - previewWidth - 8
+        : rect.right + 8
+      setPreviewPos({ top: rect.top, left })
     }
   }
 

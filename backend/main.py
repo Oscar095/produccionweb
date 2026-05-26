@@ -53,6 +53,10 @@ app.include_router(indicadores.router)
 @app.on_event("startup")
 def startup():
     """Crear tablas del esquema planeacion.* si no existen."""
+    import os
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        print("[startup] WARNING: ANTHROPIC_API_KEY no está configurada — Koski IA fallará al recibir requests.")
+
     # Solo crea tablas nuevas — no toca las existentes de dbo.*
     from sqlalchemy import text
     with engine.connect() as conn:
@@ -83,11 +87,16 @@ def startup():
             ("tasa_servicio",  "Tasa de Servicio",       95.0),
             ("disponibilidad", "Disponibilidad Equipos",  90.0),
             ("eficiencia",     "Eficiencia Equipos",      80.0),
+            ("calidad",        "Calidad Equipos",         95.0),
         ]
         with SessionLocal() as session:
             for kpi, label, valor in _METAS_DEFAULT:
-                if not session.query(MetaKPI).filter(MetaKPI.kpi == kpi).first():
+                existing = session.query(MetaKPI).filter(MetaKPI.kpi == kpi).first()
+                if not existing:
                     session.add(MetaKPI(kpi=kpi, label=label, valor=valor))
+                elif existing.valor < 0 or existing.valor > 100:
+                    existing.valor = valor
+                    session.add(existing)
             session.commit()
         print("[startup] seed metas KPI OK")
     except Exception as e:

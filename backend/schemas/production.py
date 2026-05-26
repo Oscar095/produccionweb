@@ -97,7 +97,7 @@ class MaquinaEficienciaOut(BaseModel):
     maquina_id: int
     maquina_nombre: Optional[str] = None
     dias_trabajados: int
-    horas_operativas: float        # 24×días − paradas de mantenimiento
+    horas_operativas: float        # L-V 24h + Sáb 8h + Dom 8h-si-trabajó (sin paradas)
     capacidad_hora: int
     produccion_real: int           # produccion + clase_b + desecho
     produccion_teorica: float      # capacidad_hora × horas_operativas

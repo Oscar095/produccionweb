@@ -10,6 +10,7 @@ from models.production import OpNumero, RegistroProduccion, Maquina, CentroCosto
 from models.maintenance import SolicitudMantenimiento
 from models.planning import Asignacion
 from services.working_hours import operative_hours_between
+from services.indicadores_service import compute_tasa_servicio
 from schemas.production import (
     OpNumeroOut, KPIProduccionOut, MaquinaOut, CentroCostosOut,
     RegistroProduccionCreate, RegistroProduccionOut, PersonalPlantaOut,
@@ -146,22 +147,9 @@ def get_kpis(db: Session = Depends(get_db), _=Depends(get_current_user)):
     pct = round(completadas / total * 100, 1) if total else 0.0
 
     hoy = date.today()
-    primer_dia = date(hoy.year, hoy.month, 1)
-    ultimo_dia = date(hoy.year, hoy.month, monthrange(hoy.year, hoy.month)[1])
-
-    mes_total = db.query(func.count(OpNumero.Id)).filter(
-        OpNumero.f851_fecha_terminacion >= primer_dia,
-        OpNumero.f851_fecha_terminacion <= ultimo_dia,
-    ).scalar() or 0
-
-    mes_atrasadas = db.query(func.count(OpNumero.Id)).filter(
-        OpNumero.f851_fecha_terminacion >= primer_dia,
-        OpNumero.f851_fecha_terminacion <= ultimo_dia,
-        OpNumero.f851_fecha_terminacion < hoy,
-        OpNumero.cant_consumida < OpNumero.cantidad,
-    ).scalar() or 0
-
-    tasa_servicio = round((1 - mes_atrasadas / mes_total) * 100, 1) if mes_total > 0 else 100.0
+    primer_dia_dt = datetime(hoy.year, hoy.month, 1)
+    ultimo_dia_dt = datetime(hoy.year, hoy.month, monthrange(hoy.year, hoy.month)[1], 23, 59, 59)
+    tasa_servicio, mes_total, mes_atrasadas = compute_tasa_servicio(db, primer_dia_dt, ultimo_dia_dt, None)
 
     return KPIProduccionOut(
         total_ordenes=total, completadas=completadas, en_proceso=en_proceso,

@@ -13,12 +13,27 @@ export interface SemanaValor {
   inicio: string
   fin: string
   valor: number
+  estado?: 'pasada' | 'en_curso' | 'futura'
 }
 
 export interface MaquinaValor {
   maquina_id: number
   maquina_nombre: string | null
   valor: number
+  // campos detallados opcionales por KPI
+  dias_trabajados?: number | null
+  horas_disponibles?: number | null
+  horas_parada?: number | null
+  horas_operativas?: number | null
+  capacidad_hora?: number | null
+  produccion_real?: number | null
+  produccion_teorica?: number | null
+  produccion_buena?: number | null
+  clase_b?: number | null
+  desecho?: number | null
+  produccion_total?: number | null
+  total_ops?: number | null
+  ops_atrasadas?: number | null
 }
 
 export interface IndicadorData {

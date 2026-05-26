@@ -577,6 +577,7 @@ const KPI_ICON: Record<string, { color: string; bg: string }> = {
   tasa_servicio:  { color: 'text-violet-600', bg: 'bg-violet-100' },
   disponibilidad: { color: 'text-teal-600',   bg: 'bg-teal-100' },
   eficiencia:     { color: 'text-orange-600', bg: 'bg-orange-100' },
+  calidad:        { color: 'text-cyan-600',   bg: 'bg-cyan-100' },
 }
 
 function TabMetas() {
