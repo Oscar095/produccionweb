@@ -30,14 +30,18 @@ from schemas.production import (
 )
 from services.working_hours import operative_hours_between
 
-# Horario oficial de planta para fines de semana
+# Horario oficial de planta
+HORA_INICIO_LUNES: int = 6        # producción arranca a las 06:00 los lunes
+HORAS_LUNES: float = 24.0 - HORA_INICIO_LUNES   # = 18h
 HORAS_SABADO: float = 8.0
 HORAS_DOMINGO_SI_TRABAJA: float = 8.0
 
 
 def _horas_operativas_dia(d: date, tuvo_registros: bool) -> float:
-    """L-V → 24h, Sábado → 8h, Domingo → 8h solo si la máquina registró producción."""
+    """Lunes → 18h (06:00-24:00), Mar-Vie → 24h, Sáb → 8h, Dom → 8h si trabajó."""
     wd = d.weekday()
+    if wd == 0:
+        return HORAS_LUNES
     if wd <= 4:
         return 24.0
     if wd == 5:
@@ -197,11 +201,18 @@ def _horas_planta_periodo(inicio: datetime, fin: datetime) -> float:
             hour=0, minute=0, second=0, microsecond=0
         )
         chunk_end = min(fin, end_of_day)
-        chunk_h = (chunk_end - cursor).total_seconds() / 3600.0
-        if wd <= 4:
-            total += chunk_h
-        elif wd == 5:
+        if wd == 0:  # Lunes: producción arranca a las HORA_INICIO_LUNES
+            lunes_6am = cursor.replace(
+                hour=HORA_INICIO_LUNES, minute=0, second=0, microsecond=0
+            )
+            effective_start = max(cursor, lunes_6am)
+            total += max(0.0, (chunk_end - effective_start).total_seconds() / 3600.0)
+        elif wd <= 4:  # Mar-Vie: 24h completas
+            total += (chunk_end - cursor).total_seconds() / 3600.0
+        elif wd == 5:  # Sábado: 8h (proporcional si el rango lo recorta)
+            chunk_h = (chunk_end - cursor).total_seconds() / 3600.0
             total += HORAS_SABADO * (chunk_h / 24.0)
+        # Domingo: 0 (se suma per-máquina en compute_disponibilidad)
         cursor = chunk_end
     return total
 

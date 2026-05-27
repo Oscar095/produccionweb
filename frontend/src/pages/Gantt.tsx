@@ -133,7 +133,6 @@ export default function GanttPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['gantt', viewMode, desde, hasta],
     queryFn: () => getGanttData({ desde, hasta }),
-    enabled: tab === 'carga',
   })
 
   const recursos: GanttRecurso[] = data?.recursos ?? []

@@ -137,7 +137,7 @@ export default function Indicadores() {
     return Number((data.valor_periodo - data.meta).toFixed(1))
   }, [data])
 
-  const extraCols = getColumns(activeTab)
+  const extraCols = isKpiTab ? getColumns(activeTab as KpiKey) : []
 
   return (
     <div className="min-h-screen bg-slate-50">
