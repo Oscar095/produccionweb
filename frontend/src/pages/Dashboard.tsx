@@ -144,6 +144,7 @@ export default function Dashboard() {
             value={qual != null ? `${qual.calidad_pct}%` : '—'}
             sub={qual != null ? `unidades buenas vs. total · mes en curso` : undefined}
             accent="bg-cyan-100"
+            meta={metaValor('calidad')}
           />
         </div>
 

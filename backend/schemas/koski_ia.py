@@ -10,6 +10,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
+    mode: Optional[Literal["fast", "deep"]] = "fast"
 
 
 class ChatResponse(BaseModel):

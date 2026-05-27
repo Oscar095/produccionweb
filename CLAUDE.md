@@ -60,8 +60,8 @@ sqlcmd -S myappskos.database.windows.net -U kos -P "password" \
   - `planning_engine.py` — capacity and feasibility calculations.
   - `report_service.py` — weekly summary + PDF generation (reportlab).
   - `working_hours.py` — operative-hour math; plant runs 24h Mon–Fri, weekends excluded.
-  - `koski_ia_service.py` — Gemini agentic loop (Google GenAI SDK).
-  - `koski_ia_tools.py` — tool implementations + `FUNCTION_DECLARATIONS` exposed to Gemini.
+  - `koski_ia_service.py` — Anthropic Claude agentic loop (anthropic SDK) with hybrid model (Haiku fast / Sonnet deep) and the `gerente-procesos` skill embedded in a cacheable system block.
+  - `koski_ia_tools.py` — tool implementations + `ANTHROPIC_TOOLS` exposed to Claude (input_schema format).
 
 ### Frontend — React 18 + TypeScript + Vite
 - **State:** `frontend/src/store/auth.ts` — Zustand store. JWT and `permisos` map (`{[modulo]: {ver, crear, editar, eliminar}}`) live in `localStorage` (`kos_token`, `kos_user`).
@@ -94,12 +94,12 @@ The `MODULOS` list in `backend/routers/roles.py` is the source of truth for what
 ## Modules
 
 ### Koski IA (AI chat assistant)
-- **Stack:** Google Gemini 2.5 Flash via the official `google-genai` SDK, integrated directly into the FastAPI backend (no n8n, no separate orchestrator).
-- **Tools** are plain Python functions in `services/koski_ia_tools.py` that receive the request's SQLAlchemy `Session` and reuse existing services (`gantt_service`, `planning_engine`, `report_service`) plus direct queries on `models.production` / `models.planning`. v1 is read-only.
-- **System prompt** is built dynamically per request in `services/koski_ia_service.py::_build_system_instruction()` (injects today's date and weekday name in Spanish, plus rules for relative-date interpretation).
-- **Streaming** uses `sse-starlette`'s `EventSourceResponse`. The generator must yield `{"data": "<json>"}` dicts (or strings) — sse-starlette wraps them in `data: ...\r\n\r\n` automatically. Yielding pre-formatted SSE strings causes double-wrapping.
-- **Frontend SSE client** (`frontend/src/api/koski_ia.ts`) uses `fetch` + `ReadableStream` (not `EventSource`, which doesn't allow `Authorization` headers). The parser tolerates `\r\n\r\n`, `\n\n`, and `\r\r` separators.
-- **Adding a tool** (3 steps in `services/koski_ia_tools.py`): write `tool_xxx(db, ...)` → register in `TOOLS` dict → add a JSON-Schema entry to `FUNCTION_DECLARATIONS` (the description is what makes Gemini decide to invoke it).
+- **Stack:** Anthropic Claude via the official `anthropic` Python SDK, integrated directly into the FastAPI backend (no n8n, no separate orchestrator). Hybrid model selection per request: `mode="fast"` → Claude Haiku 4.5 (operational chat), `mode="deep"` → Claude Sonnet 4.6 (deep analysis with the `gerente-procesos` skill).
+- **Tools** are plain Python functions in `services/koski_ia_tools.py` that receive the request's SQLAlchemy `Session` and reuse existing services (`gantt_service`, `planning_engine`, `report_service`) plus direct queries on `models.production` / `models.planning`. v1 is read-only. Analytical tools: `get_oee_breakdown`, `get_paradas_pareto`, `get_kpi_series`, `get_descriptiva`.
+- **System prompt** is built in `services/koski_ia_service.py::_build_system_blocks()` as two blocks: (1) a cacheable block with `BASE_RULES` + the full `gerente-procesos` SKILL.md (loaded once at first request from `~/.claude/skills/gerente-procesos/SKILL.md` or `backend/skills/gerente-procesos/SKILL.md` as fallback); (2) a dynamic block with today's date, current user, and mode. The cacheable block uses Anthropic's `cache_control: {type: "ephemeral"}` so subsequent turns hit the cache.
+- **Streaming** uses `sse-starlette`'s `EventSourceResponse`. The generator must yield `{"data": "<json>"}` dicts — sse-starlette wraps them in `data: ...\r\n\r\n` automatically. Internally the service consumes Anthropic's `client.messages.stream()` and re-emits events as the existing shape (`text`, `tool_call`, `tool_result`, `end`, `error`) so the frontend parser is unchanged.
+- **Frontend SSE client** (`frontend/src/api/koski_ia.ts`) uses `fetch` + `ReadableStream` (not `EventSource`, which doesn't allow `Authorization` headers). The parser tolerates `\r\n\r\n`, `\n\n`, and `\r\r` separators. The client passes `mode` in the POST body; `Chat.tsx` exposes a Rápido/Análisis toggle.
+- **Adding a tool** (3 steps in `services/koski_ia_tools.py`): write `tool_xxx(db, ...)` → register in `TOOLS` dict → add an entry to `ANTHROPIC_TOOLS` (Anthropic uses `input_schema`, not `parameters`; the description is what makes Claude decide to invoke it).
 
 ### Planning board (Kanban)
 - `KanbanPrioridad` table holds manual ordering per (machine, OP). Endpoints in `routers/planning.py`: `/board`, `/kanban`, `/kanban/prioridades`, `/asignaciones`, `/prioridades`, `/paradas`, `/feasibility`, `/timeline`.
@@ -111,8 +111,9 @@ The `MODULOS` list in `backend/routers/roles.py` is the source of truth for what
 `.env` in project root (not committed):
 ```
 CONN_STRING_SQL=Data Source=myappskos.database.windows.net;Initial Catalog=kos_apps;User ID=...;Password=...
-GOOGLE_API_KEY=<paid Google AI Studio key — required for Koski IA>
-KOSKI_IA_MODEL=gemini-2.5-flash    # optional, default Flash
+ANTHROPIC_API_KEY=<sk-ant-... required for Koski IA>
+KOSKI_IA_MODEL_FAST=claude-haiku-4-5-20251001   # optional, default Haiku 4.5
+KOSKI_IA_MODEL_DEEP=claude-sonnet-4-6           # optional, default Sonnet 4.6
 API_CERRAR_OPS=<URL>               # Siesa external API for closing OPs (planning router)
 ConniKey=...
 ConniToken=...
