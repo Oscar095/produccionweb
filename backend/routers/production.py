@@ -136,7 +136,7 @@ def get_order(docto: int, db: Session = Depends(get_db), _=Depends(get_current_u
 
 @router.get("/kpis", response_model=KPIProduccionOut)
 def get_kpis(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    ops = db.query(OpNumero).all()
+    ops = db.query(OpNumero).filter(OpNumero.tipo_inv.like('%1430K.ex%')).all()
     total = len(ops)
     completadas = sum(1 for o in ops if (o.cant_consumida or 0) >= (o.cantidad or 1))
     en_proceso  = sum(1 for o in ops if 0 < (o.cant_consumida or 0) < (o.cantidad or 1))
@@ -150,11 +150,13 @@ def get_kpis(db: Session = Depends(get_db), _=Depends(get_current_user)):
     ultimo_dia = date(hoy.year, hoy.month, monthrange(hoy.year, hoy.month)[1])
 
     mes_total = db.query(func.count(OpNumero.Id)).filter(
+        OpNumero.tipo_inv.like('%1430K.ex%'),
         OpNumero.f851_fecha_terminacion >= primer_dia,
         OpNumero.f851_fecha_terminacion <= ultimo_dia,
     ).scalar() or 0
 
     mes_atrasadas = db.query(func.count(OpNumero.Id)).filter(
+        OpNumero.tipo_inv.like('%1430K.ex%'),
         OpNumero.f851_fecha_terminacion >= primer_dia,
         OpNumero.f851_fecha_terminacion <= ultimo_dia,
         OpNumero.f851_fecha_terminacion < hoy,

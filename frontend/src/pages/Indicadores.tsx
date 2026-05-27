@@ -5,14 +5,17 @@ import {
   ReferenceLine,
 } from 'recharts'
 import {
-  BarChart3, Target, Gauge, Zap, ShieldCheck, TrendingUp,
+  BarChart3, Target, Gauge, Zap, ShieldCheck, TrendingUp, Layers,
   type LucideIcon,
 } from 'lucide-react'
 import { fetchIndicador, type KpiKey, type IndicadorData } from '../api/indicadores'
 import { getCenters } from '../api/production'
+import CapacidadesPanel from '../components/CapacidadesPanel'
+
+type TabKey = KpiKey | 'capacidad'
 
 type TabDef = {
-  key: KpiKey
+  key: TabKey
   label: string
   Icon: LucideIcon
   accent: string
@@ -48,6 +51,13 @@ const TABS: TabDef[] = [
     accent: 'text-cyan-600 bg-cyan-100',
     description: 'Unidades buenas / (buenas + clase B + desecho)',
   },
+  {
+    key: 'capacidad',
+    label: 'Capacidad',
+    Icon: Layers,
+    accent: 'text-indigo-600 bg-indigo-100',
+    description: 'Ocupación de máquinas vs. capacidad teórica por período',
+  },
 ]
 
 function currentMonthString(): string {
@@ -65,9 +75,12 @@ function colorForValue(valor: number, meta: number | null | undefined): string {
 }
 
 export default function Indicadores() {
-  const [activeTab, setActiveTab] = useState<KpiKey>('tasa_servicio')
+  const [activeTab, setActiveTab] = useState<TabKey>('tasa_servicio')
   const [mes, setMes] = useState<string>(currentMonthString())
   const [maquinaId, setMaquinaId] = useState<number | undefined>(undefined)
+  const [ytd, setYtd] = useState(false)
+
+  const isKpiTab = activeTab !== 'capacidad'
 
   const { data: maquinas = [] } = useQuery<MaquinaOpt[]>({
     queryKey: ['centers'],
@@ -76,9 +89,10 @@ export default function Indicadores() {
   })
 
   const { data, isLoading, isError, error } = useQuery<IndicadorData>({
-    queryKey: ['indicador', activeTab, mes, maquinaId],
-    queryFn: () => fetchIndicador(activeTab, mes, maquinaId),
+    queryKey: ['indicador', activeTab, mes, maquinaId, ytd],
+    queryFn: () => fetchIndicador(activeTab as KpiKey, mes, maquinaId, ytd),
     placeholderData: keepPreviousData,
+    enabled: isKpiTab,
   })
 
   const tab = TABS.find(t => t.key === activeTab)!
@@ -101,33 +115,49 @@ export default function Indicadores() {
               </div>
               <h1 className="text-3xl font-bold text-white">Indicadores de Planta</h1>
               <p className="text-blue-200 text-sm mt-1">
-                Tasa de Servicio, Disponibilidad, Eficiencia y Calidad — vista mensual, semanal y por máquina
+                Tasa de Servicio, Disponibilidad, Eficiencia, Calidad y Capacidad — vista mensual, acumulada y por máquina
               </p>
             </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <label className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-xl text-white text-sm">
-                <span className="text-blue-200 text-xs uppercase tracking-wide">Mes</span>
-                <input
-                  type="month"
-                  value={mes}
-                  onChange={e => setMes(e.target.value)}
-                  className="bg-transparent text-white text-sm outline-none [color-scheme:dark]"
-                />
-              </label>
-              <label className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-xl text-white text-sm">
-                <span className="text-blue-200 text-xs uppercase tracking-wide">Máquina</span>
-                <select
-                  value={maquinaId ?? ''}
-                  onChange={e => setMaquinaId(e.target.value ? Number(e.target.value) : undefined)}
-                  className="bg-transparent text-white text-sm outline-none [color-scheme:dark]"
-                >
-                  <option value="" className="text-slate-800">Todas</option>
-                  {maquinas.map(m => (
-                    <option key={m.Id} value={m.Id} className="text-slate-800">{m.nombre}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
+            {isKpiTab && (
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="inline-flex rounded-xl border border-white/20 overflow-hidden bg-white/5 backdrop-blur-sm">
+                  <button
+                    onClick={() => setYtd(false)}
+                    className={`px-3 py-2 text-sm font-medium transition-all ${!ytd ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
+                  >
+                    Mensual
+                  </button>
+                  <button
+                    onClick={() => setYtd(true)}
+                    className={`px-3 py-2 text-sm font-medium transition-all ${ytd ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
+                  >
+                    Acumulado
+                  </button>
+                </div>
+                <label className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-xl text-white text-sm">
+                  <span className="text-blue-200 text-xs uppercase tracking-wide">Mes</span>
+                  <input
+                    type="month"
+                    value={mes}
+                    onChange={e => setMes(e.target.value)}
+                    className="bg-transparent text-white text-sm outline-none [color-scheme:dark]"
+                  />
+                </label>
+                <label className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-xl text-white text-sm">
+                  <span className="text-blue-200 text-xs uppercase tracking-wide">Máquina</span>
+                  <select
+                    value={maquinaId ?? ''}
+                    onChange={e => setMaquinaId(e.target.value ? Number(e.target.value) : undefined)}
+                    className="bg-transparent text-white text-sm outline-none [color-scheme:dark]"
+                  >
+                    <option value="" className="text-slate-800">Todas</option>
+                    {maquinas.map(m => (
+                      <option key={m.Id} value={m.Id} className="text-slate-800">{m.nombre}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -154,6 +184,12 @@ export default function Indicadores() {
             )
           })}
         </div>
+
+        {/* Panel Capacidad */}
+        {!isKpiTab && <CapacidadesPanel cursorInicial={new Date()} />}
+
+        {/* KPI sections — solo cuando NO es capacidad */}
+        {isKpiTab && <>
 
         {/* Error / Loading */}
         {isError && (
@@ -194,15 +230,15 @@ export default function Indicadores() {
           </div>
         </div>
 
-        {/* Sección 2: Por semana */}
+        {/* Sección 2: Por semana / Por mes (YTD) */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
           <div className="flex items-center gap-2 mb-4">
             <BarChart3 size={15} className="text-slate-400" />
             <span className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
-              Por semana del mes
+              {ytd ? 'Por mes (acumulado)' : 'Por semana del mes'}
             </span>
             <span className="ml-auto text-xs text-slate-400">
-              {data?.por_semana.length ?? 0} semanas
+              {ytd ? `${data?.por_semana.length ?? 0} meses` : `${data?.por_semana.length ?? 0} semanas`}
             </span>
           </div>
           {data && data.por_semana.length > 0 ? (
@@ -300,6 +336,7 @@ export default function Indicadores() {
             </div>
           </div>
         </div>
+        </>}
       </div>
     </div>
   )

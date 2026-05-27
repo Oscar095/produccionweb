@@ -5,10 +5,9 @@ import {
   differenceInMinutes, differenceInDays, startOfDay,
 } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { ChevronLeft, ChevronRight, ChevronDown, ChevronRight as ChevronRightSm, CalendarRange, Layers, GanttChartSquare, Gauge } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronRight as ChevronRightSm, CalendarRange, Layers, GanttChartSquare } from 'lucide-react'
 import { getGanttData } from '../api/gantt'
 import Loading from '../components/Loading'
-import CapacidadesPanel from '../components/CapacidadesPanel'
 
 type GanttOpDetalle = {
   docto: number
@@ -63,7 +62,6 @@ type GanttRecurso = {
 }
 
 type ViewMode = 'monthly' | 'weekly'
-type Tab = 'carga' | 'capacidades'
 
 const COLOR_ATRASADO = '#EF4444'
 const COLOR_RIESGO   = '#F59E0B'
@@ -106,7 +104,6 @@ const fmtUnidades = (n: number): string => {
 const fmtFecha = (s?: string | null) => s ? format(new Date(s), 'dd MMM yyyy', { locale: es }) : '—'
 
 export default function GanttPage() {
-  const [tab, setTab] = useState<Tab>('carga')
   const [viewMode, setViewMode] = useState<ViewMode>('monthly')
   const [cursor, setCursor] = useState<Date>(() => startOfDay(new Date()))
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
@@ -197,24 +194,15 @@ export default function GanttPage() {
           <div className="flex items-start justify-between flex-wrap gap-4 mb-4">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                {tab === 'carga'
-                  ? <CalendarRange size={20} className="text-blue-300" />
-                  : <Gauge size={20} className="text-blue-300" />}
-                <span className="text-blue-300 text-sm font-medium uppercase tracking-widest">
-                  {tab === 'carga' ? 'Carga proyectada' : 'Ocupación de máquinas'}
-                </span>
+                <CalendarRange size={20} className="text-blue-300" />
+                <span className="text-blue-300 text-sm font-medium uppercase tracking-widest">Carga proyectada</span>
               </div>
-              <h1 className="text-3xl font-bold text-white">
-                {tab === 'carga' ? 'Gantt por Centro de Trabajo' : 'Capacidades por Máquina'}
-              </h1>
+              <h1 className="text-3xl font-bold text-white">Gantt por Centro de Trabajo</h1>
               <p className="text-blue-200 text-sm mt-1">
-                {tab === 'carga'
-                  ? 'Cada barra muestra los días hábiles necesarios, segmentados en atrasado, en riesgo y a tiempo.'
-                  : 'Ocupación = unidades producidas (produccion + clase B) sobre capacidad teórica (cap/h × horas hábiles Lun-Vie).'}
+                Cada barra muestra los días hábiles necesarios, segmentados en atrasado, en riesgo y a tiempo.
               </p>
             </div>
-            {tab === 'carga' && (
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
                 <div className="inline-flex rounded-xl border border-white/20 overflow-hidden bg-white/5 backdrop-blur-sm">
                   <button
                     onClick={() => setViewMode('monthly')}
@@ -236,28 +224,8 @@ export default function GanttPage() {
                   Hoy
                 </button>
               </div>
-            )}
           </div>
 
-          {/* Selector de pestañas */}
-          <div className="inline-flex rounded-xl border border-white/20 overflow-hidden bg-white/5 backdrop-blur-sm mb-6">
-            <button
-              onClick={() => setTab('carga')}
-              className={`px-4 py-2 text-sm font-semibold transition-all flex items-center gap-2 ${tab === 'carga' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
-            >
-              <CalendarRange size={16} />
-              Carga
-            </button>
-            <button
-              onClick={() => setTab('capacidades')}
-              className={`px-4 py-2 text-sm font-semibold transition-all flex items-center gap-2 ${tab === 'capacidades' ? 'bg-white text-slate-800' : 'text-white hover:bg-white/10'}`}
-            >
-              <Gauge size={16} />
-              Capacidades
-            </button>
-          </div>
-
-          {tab === 'carga' && (
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={handlePrev}
@@ -282,16 +250,10 @@ export default function GanttPage() {
               <ChevronRight size={18} />
             </button>
           </div>
-          )}
         </div>
       </div>
 
       <div className="px-6 -mt-5 pb-10 max-w-full mx-auto space-y-6">
-        {tab === 'capacidades' && (
-          <CapacidadesPanel cursorInicial={cursor} />
-        )}
-        {tab === 'carga' && (<>
-
 
         {isLoading && <Loading label="Calculando carga..." />}
 
@@ -585,7 +547,6 @@ export default function GanttPage() {
             </div>
           </div>
         )}
-        </>)}
       </div>
     </div>
   )

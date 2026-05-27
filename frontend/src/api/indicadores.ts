@@ -34,9 +34,11 @@ export const fetchIndicador = (
   kpi: KpiKey,
   mes?: string,
   maquinaId?: number,
+  ytd?: boolean,
 ): Promise<IndicadorData> => {
-  const params: Record<string, string | number> = {}
+  const params: Record<string, string | number | boolean> = {}
   if (mes) params.mes = mes
   if (maquinaId != null) params.maquina_id = maquinaId
+  if (ytd) params.ytd = true
   return api.get(`/api/indicadores/${kpi}`, { params }).then(r => r.data)
 }

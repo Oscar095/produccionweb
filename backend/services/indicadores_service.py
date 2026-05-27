@@ -303,8 +303,9 @@ def compute_tasa_servicio(
     inicio_d = inicio.date() if isinstance(inicio, datetime) else inicio
     fin_d = fin.date() if isinstance(fin, datetime) else fin
 
-    # Total OPs comprometidas en el período.
+    # Total OPs comprometidas en el período — solo producto real (una fila por OP).
     q_total = db.query(func.count(OpNumero.Id)).filter(
+        OpNumero.tipo_inv.like('%1430K.ex%'),
         OpNumero.f851_fecha_terminacion >= inicio_d,
         OpNumero.f851_fecha_terminacion <= fin_d,
     )
@@ -317,6 +318,7 @@ def compute_tasa_servicio(
     total = q_total.scalar() or 0
 
     q_atr = db.query(func.count(OpNumero.Id)).filter(
+        OpNumero.tipo_inv.like('%1430K.ex%'),
         OpNumero.f851_fecha_terminacion >= inicio_d,
         OpNumero.f851_fecha_terminacion <= fin_d,
         OpNumero.f851_fecha_terminacion < hoy.date(),

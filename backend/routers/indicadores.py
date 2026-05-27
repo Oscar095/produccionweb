@@ -45,6 +45,11 @@ _MESES_LARGO = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
 
+_MESES_CORTO = [
+    "", "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+    "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
+]
+
 
 def _parse_mes(mes: Optional[str]) -> tuple[int, int]:
     """Parse 'YYYY-MM' or return current year/month."""
@@ -162,6 +167,7 @@ def get_indicador(
     kpi: str,
     mes: Optional[str] = Query(default=None, description="Mes en formato YYYY-MM. Default: mes actual."),
     maquina_id: Optional[int] = Query(default=None, description="Filtrar valor_periodo y por_semana por una máquina."),
+    ytd: bool = Query(default=False, description="Si True, calcula desde el 1 de enero del año hasta hoy con desglose mensual."),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -171,28 +177,39 @@ def get_indicador(
         raise HTTPException(status_code=404, detail=f"KPI '{kpi}' no encontrado")
 
     year, month = _parse_mes(mes)
-    inicio, fin = _bounds_mes(year, month)
-
-    valor_periodo = _compute_one(kpi_norm, db, inicio, fin, maquina_id)
-
-    # Por semana del mes
-    semanas = iter_semanas_mes(year, month)
     hoy = datetime.now()
     por_semana: list[SemanaValorOut] = []
-    for sem_ini, sem_fin, label in semanas:
-        # Recortar futuro
-        sem_fin_efectivo = min(sem_fin, hoy)
-        if sem_fin_efectivo < sem_ini:
-            continue
-        valor = _compute_one(kpi_norm, db, sem_ini, sem_fin_efectivo, maquina_id)
-        por_semana.append(SemanaValorOut(
-            semana_label=label,
-            inicio=sem_ini.date(),
-            fin=sem_fin.date(),
-            valor=valor,
-        ))
 
-    # Por máquina (global del mes, no se filtra por maquina_id porque queremos compararlas)
+    if ytd:
+        inicio = datetime(year, 1, 1, 0, 0, 0)
+        fin = min(datetime(year, 12, 31, 23, 59, 59), hoy)
+        mes_label = f"Acumulado {year}"
+        for m in range(1, 13):
+            m_ini = datetime(year, m, 1, 0, 0, 0)
+            if m_ini > hoy:
+                break
+            m_fin = min(datetime(year, m, monthrange(year, m)[1], 23, 59, 59), hoy)
+            por_semana.append(SemanaValorOut(
+                semana_label=_MESES_CORTO[m],
+                inicio=m_ini.date(),
+                fin=m_fin.date(),
+                valor=_compute_one(kpi_norm, db, m_ini, m_fin, maquina_id),
+            ))
+    else:
+        inicio, fin = _bounds_mes(year, month)
+        mes_label = f"{_MESES_LARGO[month]} {year}"
+        for sem_ini, sem_fin, label in iter_semanas_mes(year, month):
+            sem_fin_efectivo = min(sem_fin, hoy)
+            if sem_fin_efectivo < sem_ini:
+                continue
+            por_semana.append(SemanaValorOut(
+                semana_label=label,
+                inicio=sem_ini.date(),
+                fin=sem_fin.date(),
+                valor=_compute_one(kpi_norm, db, sem_ini, sem_fin_efectivo, maquina_id),
+            ))
+
+    valor_periodo = _compute_one(kpi_norm, db, inicio, fin, maquina_id)
     por_maquina = _compute_por_maquina(kpi_norm, db, inicio, fin)
 
     return IndicadorOut(
@@ -200,7 +217,7 @@ def get_indicador(
         periodo=PeriodoIndicadorOut(
             inicio=inicio.date(),
             fin=fin.date(),
-            mes_label=f"{_MESES_LARGO[month]} {year}",
+            mes_label=mes_label,
         ),
         meta=_meta_para(db, kpi_norm),
         valor_periodo=valor_periodo,
