@@ -19,7 +19,7 @@ from calendar import monthrange
 from datetime import datetime, timedelta, date
 from typing import Optional, List, Tuple
 
-from sqlalchemy import func, cast
+from sqlalchemy import func, cast, String
 from sqlalchemy.orm import Session
 from sqlalchemy import Date as SADate
 
@@ -182,7 +182,16 @@ def _maquinas_universo(
     ids = ids_prod | ids_paradas
     if not ids:
         return []
-    return db.query(Maquina).filter(Maquina.Id.in_(ids)).all()
+    from models.maintenance import EstadoMaquina
+    return (
+        db.query(Maquina)
+        .join(EstadoMaquina, EstadoMaquina.Id == Maquina.estado)
+        .filter(
+            Maquina.Id.in_(ids),
+            func.lower(cast(EstadoMaquina.estado_descripcion, String(200))) != 'no disponible',
+        )
+        .all()
+    )
 
 
 def _horas_planta_periodo(inicio: datetime, fin: datetime) -> float:
@@ -363,11 +372,29 @@ def compute_calidad(
     ids = [r[0] for r in rows if r[0] is not None]
     nombres = _nombres_maquinas(db, ids)
 
+    # Exclude "No Disponible" machines
+    disponibles: set[int] = set(ids)
+    if ids:
+        from models.maintenance import EstadoMaquina
+        disponibles = {
+            row[0] for row in (
+                db.query(Maquina.Id)
+                .join(EstadoMaquina, EstadoMaquina.Id == Maquina.estado)
+                .filter(
+                    Maquina.Id.in_(ids),
+                    func.lower(cast(EstadoMaquina.estado_descripcion, String(200))) != 'no disponible',
+                )
+                .all()
+            )
+        }
+
     por_maquina: list[MaquinaCalidadOut] = []
     buena_total = 0
     produccion_total = 0
     for mid, buena, clase_b, desecho in rows:
         if mid is None:
+            continue
+        if mid not in disponibles:
             continue
         buena = int(buena or 0)
         clase_b = int(clase_b or 0)
@@ -467,6 +494,7 @@ def compute_tasa_servicio_por_maquina(
     inicio_d = inicio.date() if isinstance(inicio, datetime) else inicio
     fin_d = fin.date() if isinstance(fin, datetime) else fin
 
+    from models.maintenance import EstadoMaquina as _EstadoMaquina
     rows = (
         db.query(
             Asignacion.maquina_id,
@@ -483,10 +511,13 @@ def compute_tasa_servicio_por_maquina(
             ).label("atrasadas"),
         )
         .join(OpNumero, OpNumero.docto == Asignacion.op_docto)
+        .join(Maquina, Maquina.Id == Asignacion.maquina_id)
+        .join(_EstadoMaquina, _EstadoMaquina.Id == Maquina.estado)
         .filter(
             Asignacion.suspendida == False,
             OpNumero.f851_fecha_terminacion >= inicio_d,
             OpNumero.f851_fecha_terminacion <= fin_d,
+            func.lower(cast(_EstadoMaquina.estado_descripcion, String(200))) != 'no disponible',
         )
         .group_by(Asignacion.maquina_id)
         .all()

@@ -11,6 +11,8 @@ export type CapacidadMaquinaItem = {
   maquina_id: number
   maquina_nombre: string
   centro_costos: string | null
+  rutas_siesa_id: number | null
+  rutas_siesa_nombre: string | null
   capacidad_hora: number
   horas_disponibles: number
   unidades_teoricas: number

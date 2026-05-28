@@ -118,6 +118,7 @@ class KanbanColumnaOut(BaseModel):
     maquina_nombre: str
     capacidad_hora: int
     rutas_siesa: Optional[str] = None
+    maquinas_en_ruta: List[str] = []
     ordenes: List[KanbanOrdenOut]
 
 

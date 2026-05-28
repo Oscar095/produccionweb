@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/auth'
-import PlanningLogo from '../components/PlanningLogo'
 import { User, Lock, LogIn, AlertCircle, Activity, Factory, TrendingUp } from 'lucide-react'
 
 export default function Login() {
@@ -39,10 +38,7 @@ export default function Login() {
 
         <div className="relative z-10">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-white">
-              <PlanningLogo size={40} />
-            </div>
-            <span className="text-blue-300 text-sm font-semibold uppercase tracking-widest">KOS Xpress</span>
+            <img src="/logo.png" alt="KOS Logo" className="h-24 w-auto object-contain" />
           </div>
         </div>
 
@@ -86,10 +82,7 @@ export default function Login() {
         <div className="w-full max-w-md">
           {/* Mobile logo */}
           <div className="lg:hidden flex flex-col items-center mb-8">
-            <div className="text-blue-900">
-              <PlanningLogo size={48} />
-            </div>
-            <span className="text-blue-600 text-xs font-bold uppercase tracking-widest mt-2">KOS Xpress</span>
+            <img src="/logo.png" alt="KOS Logo" className="h-20 w-auto object-contain" />
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-xl p-8">

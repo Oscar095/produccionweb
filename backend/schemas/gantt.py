@@ -72,6 +72,8 @@ class CapacidadMaquinaItem(BaseModel):
     maquina_id: int
     maquina_nombre: str
     centro_costos: Optional[str] = None
+    rutas_siesa_id: Optional[int] = None
+    rutas_siesa_nombre: Optional[str] = None
     capacidad_hora: int
     horas_disponibles: float
     unidades_teoricas: int

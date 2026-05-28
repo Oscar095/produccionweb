@@ -46,6 +46,7 @@ type Columna = {
   maquina_nombre: string
   capacidad_hora: number
   rutas_siesa?: string | null
+  maquinas_en_ruta?: string[]
   ordenes: OrdenCard[]
 }
 
@@ -423,7 +424,7 @@ export default function Planning() {
                   }`}
                 >
                   <LayoutGrid size={15} />
-                  Kanban por Máquina
+                  Kanban por Ruta
                 </button>
                 <button
                   onClick={() => setTab('timeline')}
@@ -523,8 +524,8 @@ export default function Planning() {
             {cols.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center">
                 <Inbox size={40} className="mx-auto text-slate-200 mb-3" />
-                <p className="text-slate-400 font-medium">No hay máquinas con ruta SIESA configurada.</p>
-                <p className="text-slate-300 text-sm mt-1">Asigna una ruta SIESA a las máquinas para ver sus órdenes.</p>
+                <p className="text-slate-400 font-medium">No hay rutas SIESA configuradas.</p>
+                <p className="text-slate-300 text-sm mt-1">Configura rutas SIESA y asígnalas a las máquinas para ver sus órdenes.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -570,9 +571,13 @@ export default function Planning() {
                               {col.maquina_nombre}
                             </h3>
                             <p className="text-[11px] text-slate-400 mt-0.5 truncate">
-                              {col.capacidad_hora.toLocaleString()} uds/hora
-                              {col.rutas_siesa && <span className="ml-1">· {col.rutas_siesa}</span>}
+                              {col.capacidad_hora.toLocaleString()} uds/hora total
                             </p>
+                            {col.maquinas_en_ruta && col.maquinas_en_ruta.length > 0 && (
+                              <p className="text-[10px] text-slate-300 truncate mt-0.5">
+                                {col.maquinas_en_ruta.join(' · ')}
+                              </p>
+                            )}
                           </div>
                           <span className="bg-slate-100 text-slate-600 rounded-full px-2 py-0.5 text-xs font-bold">
                             {searchTerm.trim()

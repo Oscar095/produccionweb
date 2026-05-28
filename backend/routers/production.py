@@ -2,7 +2,7 @@ from datetime import datetime, date, timedelta
 from calendar import monthrange
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import or_, func, cast, Date
+from sqlalchemy import or_, func, cast, Date, String
 from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_roles
@@ -307,7 +307,13 @@ def get_equipment_oee(db: Session = Depends(get_db), _=Depends(get_current_user)
 @router.get("/centers", response_model=List[MaquinaOut])
 def list_centers(db: Session = Depends(get_db), _=Depends(get_current_user)):
     from models.maintenance import EstadoMaquina
-    maquinas = db.query(Maquina).order_by(Maquina.Id).all()
+    maquinas = (
+        db.query(Maquina)
+        .join(EstadoMaquina, EstadoMaquina.Id == Maquina.estado)
+        .filter(func.lower(cast(EstadoMaquina.estado_descripcion, String(200))) != 'no disponible')
+        .order_by(Maquina.Id)
+        .all()
+    )
     resultado = []
     for m in maquinas:
         estado_obj = db.query(EstadoMaquina).filter(EstadoMaquina.Id == m.estado).first()

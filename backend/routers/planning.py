@@ -141,61 +141,70 @@ def get_kanban(
     _=Depends(get_current_user),
 ):
     """
-    Tablero Kanban por ruta SIESA.
-    Una columna por máquina con rutas_siesa_id; las OPs se asocian por
-    nombre: rutas_siesa.nombre_ruta == OpNumero.ruta_op. Solo OPs activas
-    y tipo_inv='IN1430K.ex'.
-    Orden: prioridad manual ASC (KanbanPrioridad) luego OpNumero.created_at ASC.
-
-    Nota: op_numeros.ruta_op y maquinas.rutas_siesa son TEXT; la FK real es
-    maquinas.rutas_siesa_id -> planeacion.rutas_siesa.id. Hacemos el match
-    por nombre (con CAST para que SQL Server no falle "text vs varchar").
+    Tablero Kanban por Ruta SIESA.
+    Una columna por ruta; las OPs se asocian por nombre de ruta.
+    Máquinas en estado "No Disponible" se excluyen.
+    La columna usa la máquina de menor Id como representante para el sistema de prioridades.
     """
+    from models.maintenance import EstadoMaquina
+    from collections import defaultdict
+    from sqlalchemy import func as sqlfunc
+
     maquinas = (
         db.query(Maquina)
-        .filter(Maquina.rutas_siesa_id.isnot(None))
+        .join(EstadoMaquina, EstadoMaquina.Id == Maquina.estado)
+        .filter(
+            Maquina.rutas_siesa_id.isnot(None),
+            sqlfunc.lower(cast(EstadoMaquina.estado_descripcion, String(200))) != 'no disponible',
+        )
         .all()
     )
     if not maquinas:
         return {"columnas": []}
 
-    ruta_ids = sorted({m.rutas_siesa_id for m in maquinas if m.rutas_siesa_id is not None})
+    # Group machines by rutas_siesa_id
+    grupos: dict[int, list[Maquina]] = defaultdict(list)
+    for m in maquinas:
+        grupos[m.rutas_siesa_id].append(m)
+
+    ruta_ids = list(grupos.keys())
     rutas = db.query(RutaSiesa).filter(RutaSiesa.id.in_(ruta_ids)).all()
-    id_to_nombre = {r.id: r.nombre_ruta for r in rutas}
-    id_to_orden  = {r.id: (r.orden if r.orden is not None else 9999) for r in rutas}
-    nombres = [n for n in id_to_nombre.values() if n]
+    id_to_ruta = {r.id: r for r in rutas}
 
-    # Orden de columnas por planeacion.rutas_siesa.orden ASC; el nombre de
-    # maquina actua como desempate cuando dos maquinas comparten ruta
-    # (p.ej. FLEXO 1 y FLEXO 2 con "Impresion Polyboard").
-    # dbo.maquinas.nombre es TEXT → ordenamos en Python para no castear en SQL.
-    maquinas.sort(key=lambda m: (id_to_orden.get(m.rutas_siesa_id, 9999), (m.nombre or "").lower()))
+    # Sort route groups by RutaSiesa.orden ASC
+    ruta_ids_sorted = sorted(
+        ruta_ids,
+        key=lambda rid: (id_to_ruta[rid].orden if rid in id_to_ruta and id_to_ruta[rid].orden is not None else 9999),
+    )
 
-    if not nombres:
+    nombres_ruta = [id_to_ruta[rid].nombre_ruta for rid in ruta_ids_sorted if rid in id_to_ruta and id_to_ruta[rid].nombre_ruta]
+
+    if not nombres_ruta:
         ops = []
     else:
         ops = (
             db.query(OpNumero)
             .filter(
-                cast(OpNumero.ruta_op, String(200)).in_(nombres),
+                cast(OpNumero.ruta_op, String(200)).in_(nombres_ruta),
                 OpNumero.estados == 1,
             )
             .all()
         )
 
-    ops_by_nombre: dict[str, list[OpNumero]] = {}
+    ops_by_ruta_nombre: dict[str, list[OpNumero]] = {}
     for op in ops:
         key = str(op.ruta_op) if op.ruta_op is not None else ""
-        ops_by_nombre.setdefault(key, []).append(op)
+        ops_by_ruta_nombre.setdefault(key, []).append(op)
 
-    maq_ids = [m.Id for m in maquinas]
+    # Build priority map using representative machine (lowest Id) per route
+    all_maq_ids = [m.Id for m in maquinas]
     op_doctos = [op.docto for op in ops]
     prio_map: dict[tuple[int, int], int] = {}
-    if maq_ids and op_doctos:
+    if all_maq_ids and op_doctos:
         prios = (
             db.query(KanbanPrioridad)
             .filter(
-                KanbanPrioridad.maquina_id.in_(maq_ids),
+                KanbanPrioridad.maquina_id.in_(all_maq_ids),
                 KanbanPrioridad.op_docto.in_(op_doctos),
             )
             .all()
@@ -208,31 +217,38 @@ def get_kanban(
         check_map = {c.op_docto: c for c in checks}
 
     columnas = []
-    for m in maquinas:
-        nombre_ruta = id_to_nombre.get(m.rutas_siesa_id)
-        ops_maq = ops_by_nombre.get(nombre_ruta, []) if nombre_ruta else []
+    for ruta_id in ruta_ids_sorted:
+        ruta_obj = id_to_ruta.get(ruta_id)
+        if not ruta_obj:
+            continue
 
-        def _sort_key(op: OpNumero):
-            prio = prio_map.get((m.Id, op.docto))
-            # Prioridad manual primero (si existe), luego por fecha de terminación ASC
+        grupo_maquinas = sorted(grupos[ruta_id], key=lambda m: m.Id)
+        representative = grupo_maquinas[0]
+        rep_id = representative.Id
+        capacidad_total = sum(m.capacidad_hora or 0 for m in grupo_maquinas)
+        nombre_ruta = ruta_obj.nombre_ruta or str(ruta_id)
+        maquinas_nombres = sorted([m.nombre for m in grupo_maquinas if m.nombre])
+
+        ops_ruta = ops_by_ruta_nombre.get(nombre_ruta, [])
+
+        def _sort_key(op: OpNumero, _rep_id: int = rep_id):
+            prio = prio_map.get((_rep_id, op.docto))
             return (
                 0 if prio is not None else 1,
                 prio if prio is not None else 0,
                 op.f851_fecha_terminacion or datetime.max,
             )
 
-        ops_maq_sorted = sorted(ops_maq, key=_sort_key)
+        ops_sorted = sorted(ops_ruta, key=_sort_key)
 
-        # Cursor por maquina: la siguiente OP empieza cuando termina la anterior,
-        # de modo que las fechas estimadas crecen hacia abajo en el tablero.
         cursor = datetime.utcnow()
         ordenes = []
-        for op in ops_maq_sorted:
+        for op in ops_sorted:
             cant = op.cantidad or 0
             cons = op.cant_consumida or 0
             estado_op = "Pendiente" if cons <= 0 else ("Completado" if cons >= cant else "En proceso")
             pct = round(min(cons / cant * 100, 100), 1) if cant else 0.0
-            horas = round(op.cantidad / m.capacidad_hora, 2) if op.cantidad and m.capacidad_hora else None
+            horas = round(op.cantidad / representative.capacidad_hora, 2) if op.cantidad and representative.capacidad_hora else None
             chk = check_map.get(op.docto)
             checks_out = KanbanCheckOut(
                 impresion=chk.impresion if chk else False,
@@ -242,24 +258,22 @@ def get_kanban(
             )
 
             fecha_estimada = None
-            if op.cantidad and m.capacidad_hora:
+            if op.cantidad and representative.capacidad_hora:
                 horas_calc = 0.0
                 if not checks_out.impresion:  horas_calc += 48.0
                 if not checks_out.troquelado: horas_calc += 48.0
-                if not checks_out.formacion:  horas_calc += op.cantidad / m.capacidad_hora
-                horas_calc += 24.0
+                if not checks_out.formacion:  horas_calc += op.cantidad / representative.capacidad_hora
+                if not checks_out.bodega:     horas_calc += 24.0
                 fin_natural = add_operative_hours(cursor, horas_calc)
-                # Piso: nunca antes de la fecha comprometida con Siesa
                 f851 = op.f851_fecha_terminacion
                 bumped = False
                 if f851 is not None and fin_natural < f851:
                     fin_natural = f851
                     bumped = True
                 fecha_estimada = fin_natural
-                cursor = fin_natural  # avanza para la siguiente OP de la columna
-                # DEBUG temporal — quitar despues de validar
+                cursor = fin_natural
                 f851_str = f851.date().isoformat() if f851 else "None"
-                print(f"[KANBAN] maq={(m.nombre or '')[:20]:<20} op={op.docto} horas={horas_calc:6.1f} fin={fin_natural.date()} f851={f851_str} bumped={bumped}")
+                print(f"[KANBAN] ruta={nombre_ruta[:20]:<20} op={op.docto} horas={horas_calc:6.1f} fin={fin_natural.date()} f851={f851_str} bumped={bumped}")
 
             ordenes.append(KanbanOrdenOut(
                 op_docto=op.docto,
@@ -274,15 +288,16 @@ def get_kanban(
                 fecha_entrega=op.f851_fecha_terminacion,
                 fecha_entrega_estimada=fecha_estimada,
                 created_at=op.created_at,
-                prioridad=prio_map.get((m.Id, op.docto)),
+                prioridad=prio_map.get((rep_id, op.docto)),
                 checks=checks_out,
             ).model_dump())
 
         columnas.append(KanbanColumnaOut(
-            maquina_id=m.Id,
-            maquina_nombre=m.nombre,
-            capacidad_hora=m.capacidad_hora,
-            rutas_siesa=m.rutas_siesa,
+            maquina_id=rep_id,
+            maquina_nombre=nombre_ruta,
+            capacidad_hora=capacidad_total,
+            rutas_siesa=nombre_ruta,
+            maquinas_en_ruta=maquinas_nombres,
             ordenes=ordenes,
         ).model_dump())
 

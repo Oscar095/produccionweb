@@ -84,10 +84,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {bannerVisible && (
           <div className="px-5 pt-6 pb-3">
             <div className="flex items-center gap-2 mb-2">
-              <div className="text-blue-200">
-                <PlanningLogo size={20} />
-              </div>
-              <h1 className="text-lg font-bold leading-tight">Planeación KOS</h1>
+              <img src="/logo.png" alt="KOS Logo" className="h-14 w-auto object-contain" />
             </div>
             <p className="text-xs text-blue-300 mt-0.5">Planeación de Producción</p>
           </div>

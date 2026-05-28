@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from models.production import Maquina, OpNumero, RegistroProduccion, CentroCostos
 from models.planning import RutaSiesa
+from models.maintenance import EstadoMaquina
 from schemas.gantt import (
     GanttDataOut, GanttRecurso, GanttTarea, GanttOpDetalle,
     CapacidadesDataOut, CapacidadMaquinaItem, CapacidadTendenciaPunto,
@@ -284,14 +285,20 @@ def get_capacidades_data(db: Session, desde: datetime, hasta: datetime) -> Capac
     Calcula ocupación por máquina = (produccion + clase_b) / (capacidad_hora * horas_op).
     Horas operativas: Lun–Vie 24h (no se descuentan paradas programadas).
     """
-    # Máquinas con capacidad declarada (las que pueden producir unidades).
+    # Máquinas con capacidad declarada, excluyendo "No Disponible".
     maquinas: List[Maquina] = (
         db.query(Maquina)
-        .filter(Maquina.capacidad_hora > 0)
+        .join(EstadoMaquina, EstadoMaquina.Id == Maquina.estado)
+        .filter(
+            Maquina.capacidad_hora > 0,
+            func.lower(cast(EstadoMaquina.estado_descripcion, String(200))) != 'no disponible',
+        )
         .all()
     )
     # Centros de costo para resolver nombres.
     centros = {c.Id: c for c in db.query(CentroCostos).all()}
+    # Rutas SIESA para resolver nombres.
+    rutas_map = {r.id: r.nombre_ruta for r in db.query(RutaSiesa).all()}
 
     horas_disp_periodo = operative_hours_between(desde, hasta)
 
@@ -322,6 +329,8 @@ def get_capacidades_data(db: Session, desde: datetime, hasta: datetime) -> Capac
             maquina_id=m.Id,
             maquina_nombre=(m.nombre or "").strip() or f"Máquina {m.Id}",
             centro_costos=(centro.centro if centro and centro.centro else None),
+            rutas_siesa_id=m.rutas_siesa_id,
+            rutas_siesa_nombre=rutas_map.get(m.rutas_siesa_id) if m.rutas_siesa_id else None,
             capacidad_hora=cap_hora,
             horas_disponibles=round(horas_disp_periodo, 2),
             unidades_teoricas=teoricas,

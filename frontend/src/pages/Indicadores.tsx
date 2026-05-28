@@ -1,15 +1,15 @@
 import { useMemo, useState } from 'react'
-import { useQuery, keepPreviousData } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
   ReferenceLine,
 } from 'recharts'
 import {
   BarChart3, Target, Gauge, Zap, ShieldCheck, TrendingUp, Layers, Table2,
-  type LucideIcon,
+  Loader2, type LucideIcon,
 } from 'lucide-react'
 import { fetchIndicador, type KpiKey, type IndicadorData, type MaquinaValor } from '../api/indicadores'
-import { getCenters } from '../api/production'
+import { getMaquinas, getRutasSiesa } from '../api/config'
 import CapacidadesPanel from '../components/CapacidadesPanel'
 
 type TabKey = KpiKey | 'capacidad'
@@ -65,7 +65,8 @@ function currentMonthString(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-interface MaquinaOpt { Id: number; nombre: string }
+interface MaquinaOpt { id: number; nombre: string; rutas_siesa_id: number | null }
+interface RutaOpt { id: number; nombre_ruta: string }
 
 function colorForValue(valor: number, meta: number | null | undefined): string {
   const reference = Math.min(Math.max(meta ?? 80, 1), 100)
@@ -113,20 +114,30 @@ export default function Indicadores() {
   const [activeTab, setActiveTab] = useState<TabKey>('tasa_servicio')
   const [mes, setMes] = useState<string>(currentMonthString())
   const [maquinaId, setMaquinaId] = useState<number | undefined>(undefined)
+  const [rutaId, setRutaId] = useState<number | undefined>(undefined)
   const [ytd, setYtd] = useState(false)
 
   const isKpiTab = activeTab !== 'capacidad'
 
   const { data: maquinas = [] } = useQuery<MaquinaOpt[]>({
-    queryKey: ['centers'],
-    queryFn: getCenters,
+    queryKey: ['maquinas-config'],
+    queryFn: getMaquinas,
     staleTime: 600_000,
   })
 
-  const { data, isLoading, isError, error } = useQuery<IndicadorData>({
+  const { data: rutas = [] } = useQuery<RutaOpt[]>({
+    queryKey: ['rutas-siesa'],
+    queryFn: getRutasSiesa,
+    staleTime: 600_000,
+  })
+
+  const maquinasFiltradas = rutaId
+    ? maquinas.filter(m => m.rutas_siesa_id === rutaId)
+    : maquinas
+
+  const { data, isLoading, isFetching, isError, error } = useQuery<IndicadorData>({
     queryKey: ['indicador', activeTab, mes, maquinaId, ytd],
     queryFn: () => fetchIndicador(activeTab as KpiKey, mes, maquinaId, ytd),
-    placeholderData: keepPreviousData,
     enabled: isKpiTab,
   })
 
@@ -181,6 +192,22 @@ export default function Indicadores() {
                   />
                 </label>
                 <label className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-xl text-white text-sm">
+                  <span className="text-blue-200 text-xs uppercase tracking-wide">Ruta</span>
+                  <select
+                    value={rutaId ?? ''}
+                    onChange={e => {
+                      setRutaId(e.target.value ? Number(e.target.value) : undefined)
+                      setMaquinaId(undefined)
+                    }}
+                    className="bg-transparent text-white text-sm outline-none [color-scheme:dark]"
+                  >
+                    <option value="" className="text-slate-800">Todas</option>
+                    {rutas.map(r => (
+                      <option key={r.id} value={r.id} className="text-slate-800">{r.nombre_ruta}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-xl text-white text-sm">
                   <span className="text-blue-200 text-xs uppercase tracking-wide">Máquina</span>
                   <select
                     value={maquinaId ?? ''}
@@ -188,8 +215,8 @@ export default function Indicadores() {
                     className="bg-transparent text-white text-sm outline-none [color-scheme:dark]"
                   >
                     <option value="" className="text-slate-800">Todas</option>
-                    {maquinas.filter(m => m.Id !== 0).map(m => (
-                      <option key={m.Id} value={m.Id} className="text-slate-800">{m.nombre}</option>
+                    {maquinasFiltradas.filter(m => m.id !== 0).map(m => (
+                      <option key={m.id} value={m.id} className="text-slate-800">{m.nombre}</option>
                     ))}
                   </select>
                 </label>
@@ -227,6 +254,14 @@ export default function Indicadores() {
 
         {/* KPI sections — solo cuando NO es capacidad */}
         {isKpiTab && <>
+
+        {/* Loading overlay cuando se cambia de indicador */}
+        {isFetching && !isLoading && (
+          <div className="flex items-center justify-center gap-3 py-8">
+            <Loader2 size={24} className="animate-spin text-blue-500" />
+            <span className="text-sm text-slate-500">Cargando {tab.label}...</span>
+          </div>
+        )}
 
         {/* Error / Loading */}
         {isError && (
