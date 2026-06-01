@@ -24,9 +24,11 @@ from auth import get_current_user
 from models.planning import MetaKPI
 from schemas.indicadores import (
     IndicadorOut, PeriodoIndicadorOut, SemanaValorOut, MaquinaValorOut,
+    OpTasaServicioOut,
 )
 from services.indicadores_service import (
     compute_tasa_servicio, compute_tasa_servicio_por_maquina,
+    sync_completaciones,
     compute_disponibilidad, compute_eficiencia, compute_calidad,
     iter_semanas_mes,
 )
@@ -198,6 +200,7 @@ def _compute_por_maquina(
             ))
 
         # Pseudo-máquina "Sin asignar": OPs no asignadas a ninguna máquina vigente
+        from models.planning import OpCierre
         inicio_d = inicio.date() if isinstance(inicio, datetime) else inicio
         fin_d = fin.date() if isinstance(fin, datetime) else fin
         hoy_d = datetime.now().date()
@@ -210,13 +213,22 @@ def _compute_por_maquina(
             ~OpNumero.docto.in_(subq_asignadas),
         ).scalar() or 0
 
-        sin_atrasadas = db.query(func.count(OpNumero.Id)).filter(
+        sin_incompletas = db.query(func.count(OpNumero.Id)).filter(
             OpNumero.f851_fecha_terminacion >= inicio_d,
             OpNumero.f851_fecha_terminacion <= fin_d,
             OpNumero.f851_fecha_terminacion < hoy_d,
             OpNumero.cant_consumida < OpNumero.cantidad,
             ~OpNumero.docto.in_(subq_asignadas),
         ).scalar() or 0
+
+        sin_tard = db.query(func.count(OpCierre.op_docto)).filter(
+            OpCierre.fecha_prometida >= inicio_d,
+            OpCierre.fecha_prometida <= fin_d,
+            OpCierre.fue_tarde == True,
+            ~OpCierre.op_docto.in_(subq_asignadas),
+        ).scalar() or 0
+
+        sin_atrasadas = sin_incompletas + sin_tard
 
         if sin_total > 0:
             tasa_sin = round((1 - sin_atrasadas / sin_total) * 100, 1)
@@ -241,6 +253,151 @@ def _sem_estado(sem_ini: datetime, sem_fin: datetime) -> str:
     if sem_fin < hoy:
         return "pasada"
     return "en_curso"
+
+
+@router.get("/tasa_servicio/ops", response_model=list[OpTasaServicioOut])
+def get_ops_tasa_servicio(
+    mes: Optional[str] = Query(default=None, description="Mes YYYY-MM. Default: mes actual."),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """
+    Lista todas las OPs del mes con su estado de cumplimiento.
+    Primero sincroniza completaciones recientes en planeacion.op_cierre.
+    """
+    from models.production import OpNumero, Maquina, RegistroProduccion
+    from models.planning import Asignacion, OpCierre
+    from sqlalchemy import func
+
+    sync_completaciones(db)
+
+    year, month = _parse_mes(mes)
+    inicio, fin = _bounds_mes(year, month, acotar_a_hoy=False)
+    inicio_d = inicio.date()
+    fin_d = fin.date()
+    hoy_d = date.today()
+
+    ops = (
+        db.query(OpNumero)
+        .filter(
+            OpNumero.tipo_inv.like('%1430K.ex%'),
+            OpNumero.f851_fecha_terminacion >= inicio_d,
+            OpNumero.f851_fecha_terminacion <= fin_d,
+        )
+        .order_by(OpNumero.f851_fecha_terminacion)
+        .all()
+    )
+    if not ops:
+        return []
+
+    doctos = [op.docto for op in ops]
+
+    # Cierres registrados (para estado histórico de completadas)
+    cierres = {
+        c.op_docto: c
+        for c in db.query(OpCierre).filter(OpCierre.op_docto.in_(doctos)).all()
+    }
+
+    # ── Datos reales de producción ──────────────────────────────────────────────
+    # Máquina con mayor producción por OP + fecha del último registro
+    prod_rows = (
+        db.query(
+            RegistroProduccion.numero_op,
+            RegistroProduccion.maquina,
+            func.sum(RegistroProduccion.produccion).label("total_prod"),
+            func.max(RegistroProduccion.fecha).label("ultima_fecha"),
+        )
+        .filter(RegistroProduccion.numero_op.in_(doctos))
+        .group_by(RegistroProduccion.numero_op, RegistroProduccion.maquina)
+        .all()
+    )
+
+    # Por OP: máquina con más producción y última fecha de cualquier registro
+    op_maquina_real: dict[int, int] = {}          # op_docto -> maquina_id
+    op_maquina_max_prod: dict[int, int] = {}      # op_docto -> max total_prod visto
+    op_ultima_fecha: dict[int, date] = {}          # op_docto -> última fecha registro
+
+    for num_op, maq_id, total_prod, ultima_f in prod_rows:
+        tp = int(total_prod or 0)
+        if num_op not in op_maquina_max_prod or tp > op_maquina_max_prod[num_op]:
+            op_maquina_max_prod[num_op] = tp
+            op_maquina_real[num_op] = maq_id
+        if ultima_f is not None:
+            d = ultima_f.date() if hasattr(ultima_f, 'date') else ultima_f
+            if num_op not in op_ultima_fecha or d > op_ultima_fecha[num_op]:
+                op_ultima_fecha[num_op] = d
+
+    # Fallback: asignaciones planeadas para OPs sin registros de producción
+    asigs = (
+        db.query(Asignacion)
+        .filter(Asignacion.op_docto.in_(doctos), Asignacion.suspendida == False)
+        .all()
+    )
+    asig_map: dict[int, Asignacion] = {}
+    for a in asigs:
+        if a.op_docto not in asig_map:
+            asig_map[a.op_docto] = a
+
+    # Cargar nombres de máquinas (reales + planeadas)
+    all_maq_ids = set(op_maquina_real.values()) | {a.maquina_id for a in asig_map.values()}
+    maquinas: dict[int, Maquina] = (
+        {m.Id: m for m in db.query(Maquina).filter(Maquina.Id.in_(all_maq_ids)).all()}
+        if all_maq_ids else {}
+    )
+
+    result: list[OpTasaServicioOut] = []
+    for op in ops:
+        fp = op.f851_fecha_terminacion
+        fecha_prom: date = fp.date() if hasattr(fp, 'date') else fp
+        cant = op.cantidad or 0
+        consumida = op.cant_consumida or 0
+        pct = round(min(consumida / cant * 100, 100), 1) if cant else 0.0
+
+        # Máquina: real (más producción) > planeada (asignación)
+        maq_id = op_maquina_real.get(op.docto)
+        if not maq_id:
+            asig = asig_map.get(op.docto)
+            maq_id = asig.maquina_id if asig else None
+        maq = maquinas.get(maq_id) if maq_id else None
+
+        # Estado y fecha de completación
+        cierre = cierres.get(op.docto)
+        ultima_f_prod = op_ultima_fecha.get(op.docto)
+
+        if cierre:
+            estado: str = "Completada tarde" if cierre.fue_tarde else "A tiempo"
+            dias_atraso = (cierre.fecha_completada - fecha_prom).days if cierre.fue_tarde else None
+            fecha_completada = cierre.fecha_completada
+        elif consumida >= cant and cant > 0:
+            estado = "Completada"
+            dias_atraso = None
+            fecha_completada = ultima_f_prod
+        elif fecha_prom < hoy_d:
+            estado = "Atrasada"
+            dias_atraso = (hoy_d - fecha_prom).days
+            fecha_completada = None
+        else:
+            estado = "En plazo"
+            dias_atraso = None
+            fecha_completada = None
+
+        result.append(OpTasaServicioOut(
+            op_docto=op.docto,
+            item=op.item,
+            referencia=op.ext1,
+            marca=op.marca,
+            maquina_id=maq_id,
+            maquina_nombre=maq.nombre if maq else None,
+            fecha_prometida=fecha_prom,
+            fecha_completada=fecha_completada,
+            cantidad=cant,
+            cant_consumida=consumida,
+            pct_completado=pct,
+            estado=estado,
+            dias_atraso=dias_atraso,
+        ))
+
+    return result
 
 
 @router.get("/{kpi}", response_model=IndicadorOut)

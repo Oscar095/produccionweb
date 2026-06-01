@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -6,9 +6,12 @@ import {
 } from 'recharts'
 import {
   BarChart3, Target, Gauge, Zap, ShieldCheck, TrendingUp, Layers, Table2,
-  Loader2, type LucideIcon,
+  Loader2, AlertCircle, CheckCircle2, Clock, PackageCheck, type LucideIcon,
 } from 'lucide-react'
-import { fetchIndicador, type KpiKey, type IndicadorData, type MaquinaValor } from '../api/indicadores'
+import {
+  fetchIndicador, fetchOpsTasaServicio,
+  type KpiKey, type IndicadorData, type MaquinaValor, type OpTasaServicio, type EstadoOp,
+} from '../api/indicadores'
 import { getMaquinas, getRutasSiesa } from '../api/config'
 import CapacidadesPanel from '../components/CapacidadesPanel'
 
@@ -116,6 +119,7 @@ export default function Indicadores() {
   const [maquinaId, setMaquinaId] = useState<number | undefined>(undefined)
   const [rutaId, setRutaId] = useState<number | undefined>(undefined)
   const [ytd, setYtd] = useState(false)
+  const [opsFiltro, setOpsFiltro] = useState<EstadoOp | 'Todas'>('Todas')
 
   const isKpiTab = activeTab !== 'capacidad'
 
@@ -139,6 +143,13 @@ export default function Indicadores() {
     queryKey: ['indicador', activeTab, mes, maquinaId, ytd],
     queryFn: () => fetchIndicador(activeTab as KpiKey, mes, maquinaId, ytd),
     enabled: isKpiTab,
+  })
+
+  const { data: opsData = [], isLoading: opsLoading } = useQuery<OpTasaServicio[]>({
+    queryKey: ['ops-tasa-servicio', mes],
+    queryFn: () => fetchOpsTasaServicio(mes),
+    enabled: activeTab === 'tasa_servicio',
+    staleTime: 60_000,
   })
 
   const tab = TABS.find(t => t.key === activeTab)!
@@ -509,8 +520,177 @@ export default function Indicadores() {
             )}
           </div>
         )}
+
+        {/* Sección 5: Listado de OPs — solo en tasa_servicio */}
+        {activeTab === 'tasa_servicio' && (
+          <OpsListado ops={opsData} isLoading={opsLoading} filtro={opsFiltro} setFiltro={setOpsFiltro} />
+        )}
         </>}
       </div>
+    </div>
+  )
+}
+
+// ── Helpers de estado ───────────────────────────────────────
+
+const ESTADO_CFG: Record<EstadoOp | 'Todas', { label: string; color: string; bg: string; Icon: React.ElementType }> = {
+  'Todas':            { label: 'Todas',           color: '#64748b', bg: 'bg-slate-100 text-slate-600',     Icon: Table2 },
+  'Atrasada':         { label: 'Atrasada',         color: '#F43F5E', bg: 'bg-rose-100 text-rose-700',       Icon: AlertCircle },
+  'Completada tarde': { label: 'Completada tarde', color: '#8B5CF6', bg: 'bg-violet-100 text-violet-700',   Icon: Clock },
+  'En plazo':         { label: 'En plazo',         color: '#F59E0B', bg: 'bg-amber-100 text-amber-700',     Icon: TrendingUp },
+  'A tiempo':         { label: 'A tiempo',         color: '#10B981', bg: 'bg-emerald-100 text-emerald-700', Icon: CheckCircle2 },
+  'Completada':       { label: 'Completada',       color: '#94a3b8', bg: 'bg-slate-100 text-slate-500',     Icon: PackageCheck },
+}
+
+function estadoBadge(estado: EstadoOp) {
+  const cfg = ESTADO_CFG[estado]
+  const Icon = cfg.Icon
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cfg.bg}`}>
+      <Icon size={11} />
+      {cfg.label}
+    </span>
+  )
+}
+
+// ── Componente tabla de OPs ─────────────────────────────────
+
+interface OpsListadoProps {
+  ops: OpTasaServicio[]
+  isLoading: boolean
+  filtro: EstadoOp | 'Todas'
+  setFiltro: (f: EstadoOp | 'Todas') => void
+}
+
+function OpsListado({ ops, isLoading, filtro, setFiltro }: OpsListadoProps) {
+  const filtros: (EstadoOp | 'Todas')[] = ['Todas', 'Atrasada', 'Completada tarde', 'En plazo', 'A tiempo', 'Completada']
+
+  const visible = filtro === 'Todas' ? ops : ops.filter(o => o.estado === filtro)
+
+  const counts: Partial<Record<EstadoOp | 'Todas', number>> = { Todas: ops.length }
+  for (const op of ops) {
+    counts[op.estado] = (counts[op.estado] ?? 0) + 1
+  }
+
+  const atrasadasTotal = (counts['Atrasada'] ?? 0) + (counts['Completada tarde'] ?? 0)
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div className="flex items-center gap-2">
+          <Table2 size={15} className="text-slate-400" />
+          <span className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
+            Órdenes de producción del mes
+          </span>
+          {atrasadasTotal > 0 && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-700">
+              <AlertCircle size={11} />
+              {atrasadasTotal} con atraso
+            </span>
+          )}
+        </div>
+        {/* Filtros pill */}
+        <div className="flex flex-wrap gap-1.5">
+          {filtros.map(f => {
+            const cfg = ESTADO_CFG[f]
+            const count = counts[f] ?? 0
+            const active = filtro === f
+            return (
+              <button
+                key={f}
+                onClick={() => setFiltro(f)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                  active ? cfg.bg : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                }`}
+              >
+                {f} {count > 0 && <span className="opacity-70">({count})</span>}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="py-10 flex items-center justify-center gap-2 text-slate-400 text-sm">
+          <Loader2 size={16} className="animate-spin" />
+          Cargando órdenes…
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="py-10 text-center text-slate-400 text-sm">
+          {filtro === 'Todas' ? 'Sin órdenes comprometidas en este mes.' : `Sin órdenes con estado "${filtro}".`}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100">
+                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">OP</th>
+                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Marca / Referencia</th>
+                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Máquina</th>
+                <th className="text-right py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Compromiso</th>
+                <th className="text-right py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Completada</th>
+                <th className="text-right py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Avance</th>
+                <th className="text-right py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Atraso</th>
+                <th className="text-center py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((op, i) => (
+                <tr
+                  key={op.op_docto}
+                  className={`border-b border-slate-50 hover:bg-slate-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}
+                >
+                  <td className="py-2.5 px-3 font-mono text-xs text-slate-600">{op.op_docto}</td>
+                  <td className="py-2.5 px-3 text-slate-700">
+                    <div className="font-medium leading-tight">{op.marca ?? '—'}</div>
+                    {op.referencia && <div className="text-xs text-slate-400">{op.referencia}</div>}
+                  </td>
+                  <td className="py-2.5 px-3 text-slate-600 text-xs">
+                    {op.maquina_nombre ?? <span className="italic text-slate-400">Sin registros</span>}
+                  </td>
+                  <td className="py-2.5 px-3 text-right text-slate-600 tabular-nums text-xs whitespace-nowrap">
+                    {op.fecha_prometida}
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-xs whitespace-nowrap">
+                    {op.fecha_completada
+                      ? <span className="text-slate-600">{op.fecha_completada}</span>
+                      : <span className="text-slate-300">—</span>
+                    }
+                  </td>
+                  <td className="py-2.5 px-3 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="w-14 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${op.pct_completado}%`,
+                            backgroundColor: op.pct_completado >= 100 ? '#10B981' : op.pct_completado > 0 ? '#F59E0B' : '#e2e8f0',
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs tabular-nums text-slate-500 w-8 text-right">
+                        {op.pct_completado.toFixed(0)}%
+                      </span>
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-xs">
+                    {op.dias_atraso != null ? (
+                      <span className={op.estado === 'Completada tarde' ? 'text-violet-600 font-semibold' : 'text-rose-600 font-semibold'}>
+                        +{op.dias_atraso}d
+                      </span>
+                    ) : <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="py-2.5 px-3 text-center">{estadoBadge(op.estado)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-xs text-slate-400 mt-3 italic">
+        "Completada tarde" y "A tiempo" se registran desde el primer acceso al indicador.
+        OPs terminadas antes de ese momento aparecen como "Completada" sin clasificación.
+      </p>
     </div>
   )
 }

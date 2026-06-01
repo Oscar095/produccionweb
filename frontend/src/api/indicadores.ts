@@ -57,3 +57,24 @@ export const fetchIndicador = (
   if (ytd) params.ytd = true
   return api.get(`/api/indicadores/${kpi}`, { params }).then(r => r.data)
 }
+
+export type EstadoOp = 'A tiempo' | 'Completada tarde' | 'Atrasada' | 'En plazo' | 'Completada'
+
+export interface OpTasaServicio {
+  op_docto: number
+  item: string | null
+  referencia: string | null   // ext1 (referencia/color)
+  marca: string | null
+  maquina_id: number | null
+  maquina_nombre: string | null
+  fecha_prometida: string     // ISO date
+  fecha_completada: string | null  // ISO date — último registro de producción
+  cantidad: number
+  cant_consumida: number
+  pct_completado: number
+  estado: EstadoOp
+  dias_atraso: number | null
+}
+
+export const fetchOpsTasaServicio = (mes?: string): Promise<OpTasaServicio[]> =>
+  api.get('/api/indicadores/tasa_servicio/ops', { params: mes ? { mes } : {} }).then(r => r.data)

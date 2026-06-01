@@ -425,6 +425,59 @@ def compute_calidad(
 
 # ── Tasa de Servicio ────────────────────────────────────────
 
+def sync_completaciones(db: Session) -> None:
+    """
+    Detecta OPs (tipo 1430K.ex) que pasaron a completas (cant_consumida >= cantidad)
+    del año en curso y no están en planeacion.op_cierre. Las inserta usando la fecha
+    del último registro de producción como fecha_completada (más precisa que hoy).
+    """
+    from models.planning import OpCierre
+    hoy = date.today()
+    anio_inicio = date(hoy.year, 1, 1)
+
+    registradas = db.query(OpCierre.op_docto).subquery()
+    nuevas = (
+        db.query(OpNumero)
+        .filter(
+            OpNumero.tipo_inv.like('%1430K.ex%'),
+            OpNumero.f851_fecha_terminacion >= anio_inicio,
+            OpNumero.cant_consumida >= OpNumero.cantidad,
+            ~OpNumero.docto.in_(registradas),
+        )
+        .all()
+    )
+    if not nuevas:
+        return
+
+    # Fecha del último registro de producción por OP (más precisa que hoy)
+    doctos_nuevos = [op.docto for op in nuevas]
+    last_prod_rows = (
+        db.query(RegistroProduccion.numero_op, func.max(RegistroProduccion.fecha))
+        .filter(RegistroProduccion.numero_op.in_(doctos_nuevos))
+        .group_by(RegistroProduccion.numero_op)
+        .all()
+    )
+    last_prod_date: dict[int, date] = {}
+    for num_op, max_fecha in last_prod_rows:
+        if max_fecha is not None:
+            d = max_fecha.date() if hasattr(max_fecha, 'date') else max_fecha
+            last_prod_date[num_op] = d
+
+    for op in nuevas:
+        fp = op.f851_fecha_terminacion
+        fecha_prom = fp.date() if hasattr(fp, 'date') else fp
+        fecha_compl = last_prod_date.get(op.docto, hoy)
+        db.add(OpCierre(
+            op_docto=op.docto,
+            fecha_prometida=fecha_prom,
+            fecha_completada=fecha_compl,
+            fue_tarde=fecha_compl > fecha_prom,
+            cantidad=op.cantidad,
+            cant_consumida=op.cant_consumida,
+        ))
+    db.commit()
+
+
 def compute_tasa_servicio(
     db: Session,
     inicio: datetime,
@@ -434,29 +487,26 @@ def compute_tasa_servicio(
     """
     Tasa de Servicio = (1 - atrasadas / total) × 100.
 
-    Universo: OPs con f851_fecha_terminacion en [inicio, fin]. Atrasadas: OPs
-    cuya fecha de terminación ya pasó (< hoy) y su cant_consumida < cantidad.
-
+    Atrasadas = incompletas vencidas + completadas tarde (registradas en planeacion.op_cierre).
     Devuelve (valor_pct, total, atrasadas).
     """
+    from models.planning import OpCierre, Asignacion
     hoy = datetime.now()
     inicio_d = inicio.date() if isinstance(inicio, datetime) else inicio
     fin_d = fin.date() if isinstance(fin, datetime) else fin
 
-    # Total OPs comprometidas en el período — solo producto real (una fila por OP).
     q_total = db.query(func.count(OpNumero.Id)).filter(
         OpNumero.tipo_inv.like('%1430K.ex%'),
         OpNumero.f851_fecha_terminacion >= inicio_d,
         OpNumero.f851_fecha_terminacion <= fin_d,
     )
     if maquina_id is not None:
-        # Filtro por máquina: usa el join con Asignacion (planeación)
-        from models.planning import Asignacion
         q_total = q_total.join(
             Asignacion, Asignacion.op_docto == OpNumero.docto, isouter=False
         ).filter(Asignacion.maquina_id == maquina_id, Asignacion.suspendida == False)
     total = q_total.scalar() or 0
 
+    # Incompletas vencidas
     q_atr = db.query(func.count(OpNumero.Id)).filter(
         OpNumero.tipo_inv.like('%1430K.ex%'),
         OpNumero.f851_fecha_terminacion >= inicio_d,
@@ -465,12 +515,24 @@ def compute_tasa_servicio(
         OpNumero.cant_consumida < OpNumero.cantidad,
     )
     if maquina_id is not None:
-        from models.planning import Asignacion
         q_atr = q_atr.join(
             Asignacion, Asignacion.op_docto == OpNumero.docto, isouter=False
         ).filter(Asignacion.maquina_id == maquina_id, Asignacion.suspendida == False)
-    atrasadas = q_atr.scalar() or 0
+    incompletas = q_atr.scalar() or 0
 
+    # Completadas tarde (registradas en planeacion.op_cierre)
+    q_tard = db.query(func.count(OpCierre.op_docto)).filter(
+        OpCierre.fecha_prometida >= inicio_d,
+        OpCierre.fecha_prometida <= fin_d,
+        OpCierre.fue_tarde == True,
+    )
+    if maquina_id is not None:
+        q_tard = q_tard.join(
+            Asignacion, Asignacion.op_docto == OpCierre.op_docto, isouter=False
+        ).filter(Asignacion.maquina_id == maquina_id, Asignacion.suspendida == False)
+    tard_compl = q_tard.scalar() or 0
+
+    atrasadas = incompletas + tard_compl
     tasa = round((1 - atrasadas / total) * 100, 1) if total > 0 else 100.0
     return tasa, total, atrasadas
 
@@ -484,10 +546,10 @@ def compute_tasa_servicio_por_maquina(
 ) -> list[dict]:
     """
     Devuelve lista [{maquina_id, total, atrasadas}] agrupada por máquina.
-    Una OP con múltiples asignaciones vigentes cuenta en cada una.
-    Las OPs sin asignación (sin asignar) se manejan por separado en el router.
+    Atrasadas incluye incompletas vencidas + completadas tarde (planeacion.op_cierre).
+    Las OPs sin asignación se manejan por separado en el router.
     """
-    from models.planning import Asignacion
+    from models.planning import Asignacion, OpCierre
     from sqlalchemy import case
 
     hoy = datetime.now()
@@ -523,8 +585,30 @@ def compute_tasa_servicio_por_maquina(
         .all()
     )
 
+    # Completadas tarde por máquina (desde planeacion.op_cierre)
+    tard_rows = (
+        db.query(
+            Asignacion.maquina_id,
+            func.count(func.distinct(OpCierre.op_docto)).label("tard"),
+        )
+        .join(OpCierre, OpCierre.op_docto == Asignacion.op_docto)
+        .filter(
+            Asignacion.suspendida == False,
+            OpCierre.fecha_prometida >= inicio_d,
+            OpCierre.fecha_prometida <= fin_d,
+            OpCierre.fue_tarde == True,
+        )
+        .group_by(Asignacion.maquina_id)
+        .all()
+    )
+    tard_por_maquina = {mid: int(tard or 0) for mid, tard in tard_rows}
+
     return [
-        {"maquina_id": mid, "total": int(total or 0), "atrasadas": int(atrasadas or 0)}
+        {
+            "maquina_id": mid,
+            "total": int(total or 0),
+            "atrasadas": int(atrasadas or 0) + tard_por_maquina.get(mid, 0),
+        }
         for mid, total, atrasadas in rows
         if mid is not None and (total or 0) > 0
     ]

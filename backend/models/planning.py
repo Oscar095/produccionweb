@@ -3,7 +3,7 @@ Modelos SQLAlchemy para tablas NUEVAS en esquema planeacion.*.
 Estas son las únicas tablas que la plataforma escribe.
 """
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, Float
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, Float, Date
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -183,3 +183,21 @@ class ResumenSemanal(Base):
     email_destino = Column(String(500))                # CSV de emails
 
     autor = relationship("Usuario")
+
+
+class OpCierre(Base):
+    """
+    Registra el momento en que KOS detecta que una OP pasó a completa.
+    Permite rastrear entregas tardías aunque Siesa ya la haya cerrado.
+    Una fila por OP (op_docto es PK). Solo se inserta, nunca se actualiza.
+    """
+    __tablename__ = "op_cierre"
+    __table_args__ = {"schema": "planeacion"}
+
+    op_docto         = Column(Integer, primary_key=True)
+    fecha_prometida  = Column(Date, nullable=False)    # f851_fecha_terminacion al momento de detección
+    fecha_completada = Column(Date, nullable=False)    # día en que KOS detectó cant_consumida >= cantidad
+    fue_tarde        = Column(Boolean, nullable=False)  # fecha_completada > fecha_prometida
+    cantidad         = Column(Integer)
+    cant_consumida   = Column(Integer)
+    registrado_at    = Column(DateTime, default=lambda: datetime.now(timezone.utc))

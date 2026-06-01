@@ -2,6 +2,8 @@ from datetime import date
 from typing import List, Literal, Optional
 from pydantic import BaseModel
 
+EstadoOp = Literal["A tiempo", "Completada tarde", "Atrasada", "En plazo", "Completada"]
+
 
 class PeriodoIndicadorOut(BaseModel):
     inicio: date
@@ -39,6 +41,22 @@ class MaquinaValorOut(BaseModel):
     # tasa_servicio
     total_ops: Optional[int] = None
     ops_atrasadas: Optional[int] = None
+
+
+class OpTasaServicioOut(BaseModel):
+    op_docto: int
+    item: Optional[str] = None
+    referencia: Optional[str] = None      # ext1 (referencia/color)
+    marca: Optional[str] = None
+    maquina_id: Optional[int] = None
+    maquina_nombre: Optional[str] = None
+    fecha_prometida: date
+    fecha_completada: Optional[date] = None  # fecha del último registro de producción
+    cantidad: int
+    cant_consumida: int
+    pct_completado: float
+    estado: EstadoOp
+    dias_atraso: Optional[int] = None     # días de retraso (positivo = retrasado)
 
 
 class IndicadorOut(BaseModel):
