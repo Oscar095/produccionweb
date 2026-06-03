@@ -3,8 +3,20 @@ import { getKPIs, getEquipmentAvailability, getEquipmentEfficiency, getEquipment
 import { getTicketsActivos } from '../api/maintenance'
 import { getMetas } from '../api/config'
 import {
-  AlertTriangle, LayoutDashboard, Gauge, Factory, Zap, Target, ShieldCheck, Layers,
+  AlertTriangle, LayoutDashboard, Gauge, Factory, Zap, Target, ShieldCheck, Layers, Clock,
 } from 'lucide-react'
+
+// Tiempo transcurrido de una parada desde su fecha de inicio.
+function fmtTiempoParada(fecha: string): string {
+  const ms = Date.now() - new Date(fecha).getTime()
+  if (isNaN(ms) || ms < 0) return '—'
+  const horas = ms / 3_600_000
+  if (horas < 1) return `${Math.round(ms / 60_000)} min`
+  if (horas < 24) return `${horas.toFixed(1)} h`
+  const dias = Math.floor(horas / 24)
+  const rem = Math.round(horas % 24)
+  return `${dias}d ${rem}h`
+}
 
 // ── KPI Card (matches Reports.tsx aesthetic) ─────────────────────────────────
 function KpiCard({
@@ -41,13 +53,14 @@ function KpiCard({
   )
 }
 
-export default function Dashboard() {
-  const { data: kpis } = useQuery({ queryKey: ['kpis'], queryFn: getKPIs, refetchInterval: 300_000 })
-  const { data: activos } = useQuery({ queryKey: ['tickets-activos'], queryFn: getTicketsActivos, refetchInterval: 60_000 })
-  const { data: disp } = useQuery({ queryKey: ['equipment-availability'], queryFn: getEquipmentAvailability, refetchInterval: 300_000 })
-  const { data: efic } = useQuery({ queryKey: ['equipment-efficiency'], queryFn: getEquipmentEfficiency, refetchInterval: 300_000 })
-  const { data: qual } = useQuery({ queryKey: ['equipment-quality'], queryFn: getEquipmentQuality, refetchInterval: 300_000 })
-  const { data: oee } = useQuery({ queryKey: ['equipment-oee'], queryFn: getEquipmentOEE, refetchInterval: 300_000 })
+export default function Dashboard({ kiosk = false }: { kiosk?: boolean } = {}) {
+  const refreshMs = kiosk ? 60_000 : 300_000
+  const { data: kpis } = useQuery({ queryKey: ['kpis'], queryFn: getKPIs, refetchInterval: refreshMs })
+  const { data: activos } = useQuery({ queryKey: ['tickets-activos'], queryFn: getTicketsActivos, refetchInterval: kiosk ? 30_000 : 60_000 })
+  const { data: disp } = useQuery({ queryKey: ['equipment-availability'], queryFn: getEquipmentAvailability, refetchInterval: refreshMs })
+  const { data: efic } = useQuery({ queryKey: ['equipment-efficiency'], queryFn: getEquipmentEfficiency, refetchInterval: refreshMs })
+  const { data: qual } = useQuery({ queryKey: ['equipment-quality'], queryFn: getEquipmentQuality, refetchInterval: refreshMs })
+  const { data: oee } = useQuery({ queryKey: ['equipment-oee'], queryFn: getEquipmentOEE, refetchInterval: refreshMs })
   const { data: metas = [] } = useQuery<{ kpi: string; valor: number }[]>({
     queryKey: ['config-metas'],
     queryFn: getMetas,
@@ -57,9 +70,10 @@ export default function Dashboard() {
   const metaValor = (kpi: string) => metas.find(m => m.kpi === kpi)?.valor
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className={kiosk ? 'h-screen flex flex-col overflow-hidden bg-slate-50' : 'min-h-screen bg-slate-50'}>
       {/* ── Top gradient hero ── */}
-      <div className="bg-gradient-to-br from-slate-800 via-blue-900 to-blue-800 px-6 pt-6 pb-10">
+      <div className={`bg-gradient-to-br from-slate-800 via-blue-900 to-blue-800 px-6 ${kiosk ? 'pt-4 pb-6' : 'pt-6 pb-10'}`}>
+
         <div className="max-w-full mx-auto">
           <div className="flex items-start justify-between flex-wrap gap-4">
             <div>
@@ -68,7 +82,7 @@ export default function Dashboard() {
                 <span className="text-blue-300 text-sm font-medium uppercase tracking-widest">Producción</span>
               </div>
               <h1 className="text-3xl font-bold text-white">Dashboard de Producción</h1>
-              <p className="text-blue-200 text-sm mt-1">Vista en tiempo real — actualiza cada 5 min</p>
+              <p className="text-blue-200 text-sm mt-1">Vista en tiempo real — actualiza cada {kiosk ? '1' : '5'} min</p>
             </div>
             <div className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-xl text-white text-sm">
               <Zap size={15} className="text-emerald-300" />
@@ -78,7 +92,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="px-6 -mt-5 pb-10 max-w-full mx-auto space-y-6">
+      <div className={`px-6 max-w-full mx-auto ${kiosk ? 'flex-1 min-h-0 flex flex-col gap-3 -mt-3 pb-14' : '-mt-5 pb-10 space-y-6'}`}>
 
         {/* ── OEE: indicador compuesto (titular) ── */}
         {oee != null && (
@@ -150,8 +164,8 @@ export default function Dashboard() {
 
         {/* ── Alertas de paradas activas ── */}
         {activos && activos.length > 0 && (
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100 bg-gradient-to-r from-rose-50 to-white">
+          <div className={`bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${kiosk ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+            <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100 bg-gradient-to-r from-rose-50 to-white flex-shrink-0">
               <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center">
                 <AlertTriangle size={16} className="text-rose-600" />
               </div>
@@ -162,11 +176,11 @@ export default function Dashboard() {
                 {activos.length}
               </span>
             </div>
-            <div className="p-5 space-y-2">
-              {activos.map((t: { Id: number; maquina_nombre?: string; ticket: string; descripcion_problema?: string }) => (
+            <div className={kiosk ? 'p-4 grid grid-cols-2 gap-2 overflow-hidden flex-1 min-h-0 content-start' : 'p-5 space-y-2'}>
+              {activos.map((t: { Id: number; maquina_nombre?: string; ticket: string; descripcion_problema?: string; fecha: string }) => (
                 <div
                   key={t.Id}
-                  className="flex items-center justify-between bg-slate-50/60 hover:bg-rose-50/40 rounded-xl px-4 py-3 border border-slate-100 transition-colors"
+                  className="flex items-center justify-between bg-slate-50/60 hover:bg-rose-50/40 rounded-xl px-4 py-2.5 border border-slate-100 transition-colors gap-2"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center flex-shrink-0">
@@ -180,10 +194,16 @@ export default function Dashboard() {
                       </p>
                     </div>
                   </div>
-                  <span className="flex-shrink-0 inline-flex items-center gap-1 text-xs font-semibold bg-rose-100 text-rose-700 px-2.5 py-1 rounded-full">
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" />
-                    Parada
-                  </span>
+                  <div className="flex-shrink-0 flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold bg-amber-100 text-amber-700 px-2 py-1 rounded-full tabular-nums" title="Tiempo detenida">
+                      <Clock size={11} />
+                      {fmtTiempoParada(t.fecha)}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold bg-rose-100 text-rose-700 px-2.5 py-1 rounded-full">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" />
+                      Parada
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>

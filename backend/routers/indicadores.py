@@ -28,6 +28,7 @@ from schemas.indicadores import (
 )
 from services.indicadores_service import (
     compute_tasa_servicio, compute_tasa_servicio_por_maquina,
+    resolver_maquina_por_op,
     sync_completaciones,
     compute_disponibilidad, compute_eficiencia, compute_calidad,
     iter_semanas_mes,
@@ -176,68 +177,29 @@ def _compute_por_maquina(
         ]
 
     if kpi_internal == "tasa_servicio":
-        from models.production import Maquina, OpNumero
-        from models.planning import Asignacion
-        from sqlalchemy import func
+        from models.production import Maquina
 
+        # La máquina de cada OP se resuelve por ruta (la fila maquina_id=0 ya
+        # viene incluida como "Sin asignar" desde el service).
         rows = compute_tasa_servicio_por_maquina(db, inicio, fin)
+        real_ids = [r["maquina_id"] for r in rows if r["maquina_id"] != 0]
         nombres = {
             m.Id: m.nombre
-            for m in db.query(Maquina).filter(Maquina.Id.in_([r["maquina_id"] for r in rows])).all()
-        } if rows else {}
+            for m in db.query(Maquina).filter(Maquina.Id.in_(real_ids)).all()
+        } if real_ids else {}
 
         out: list[MaquinaValorOut] = []
         for r in rows:
             total = r["total"]
             atrasadas = r["atrasadas"]
             tasa = round((1 - atrasadas / total) * 100, 1) if total > 0 else 100.0
+            mid = r["maquina_id"]
             out.append(MaquinaValorOut(
-                maquina_id=r["maquina_id"],
-                maquina_nombre=nombres.get(r["maquina_id"]),
+                maquina_id=mid,
+                maquina_nombre="Sin asignar" if mid == 0 else nombres.get(mid),
                 valor=tasa,
                 total_ops=total,
                 ops_atrasadas=atrasadas,
-            ))
-
-        # Pseudo-máquina "Sin asignar": OPs no asignadas a ninguna máquina vigente
-        from models.planning import OpCierre
-        inicio_d = inicio.date() if isinstance(inicio, datetime) else inicio
-        fin_d = fin.date() if isinstance(fin, datetime) else fin
-        hoy_d = datetime.now().date()
-
-        subq_asignadas = db.query(Asignacion.op_docto).filter(Asignacion.suspendida == False).subquery()
-
-        sin_total = db.query(func.count(OpNumero.Id)).filter(
-            OpNumero.f851_fecha_terminacion >= inicio_d,
-            OpNumero.f851_fecha_terminacion <= fin_d,
-            ~OpNumero.docto.in_(subq_asignadas),
-        ).scalar() or 0
-
-        sin_incompletas = db.query(func.count(OpNumero.Id)).filter(
-            OpNumero.f851_fecha_terminacion >= inicio_d,
-            OpNumero.f851_fecha_terminacion <= fin_d,
-            OpNumero.f851_fecha_terminacion < hoy_d,
-            OpNumero.cant_consumida < OpNumero.cantidad,
-            ~OpNumero.docto.in_(subq_asignadas),
-        ).scalar() or 0
-
-        sin_tard = db.query(func.count(OpCierre.op_docto)).filter(
-            OpCierre.fecha_prometida >= inicio_d,
-            OpCierre.fecha_prometida <= fin_d,
-            OpCierre.fue_tarde == True,
-            ~OpCierre.op_docto.in_(subq_asignadas),
-        ).scalar() or 0
-
-        sin_atrasadas = sin_incompletas + sin_tard
-
-        if sin_total > 0:
-            tasa_sin = round((1 - sin_atrasadas / sin_total) * 100, 1)
-            out.append(MaquinaValorOut(
-                maquina_id=0,
-                maquina_nombre="Sin asignar",
-                valor=tasa_sin,
-                total_ops=sin_total,
-                ops_atrasadas=sin_atrasadas,
             ))
 
         out.sort(key=lambda x: x.valor)
@@ -266,7 +228,7 @@ def get_ops_tasa_servicio(
     Primero sincroniza completaciones recientes en planeacion.op_cierre.
     """
     from models.production import OpNumero, Maquina, RegistroProduccion
-    from models.planning import Asignacion, OpCierre
+    from models.planning import OpCierre
     from sqlalchemy import func
 
     sync_completaciones(db)
@@ -298,48 +260,24 @@ def get_ops_tasa_servicio(
         for c in db.query(OpCierre).filter(OpCierre.op_docto.in_(doctos)).all()
     }
 
-    # ── Datos reales de producción ──────────────────────────────────────────────
-    # Máquina con mayor producción por OP + fecha del último registro
+    # ── Última fecha de registro de producción por OP (para fecha_completada) ──
     prod_rows = (
         db.query(
             RegistroProduccion.numero_op,
-            RegistroProduccion.maquina,
-            func.sum(RegistroProduccion.produccion).label("total_prod"),
             func.max(RegistroProduccion.fecha).label("ultima_fecha"),
         )
         .filter(RegistroProduccion.numero_op.in_(doctos))
-        .group_by(RegistroProduccion.numero_op, RegistroProduccion.maquina)
+        .group_by(RegistroProduccion.numero_op)
         .all()
     )
-
-    # Por OP: máquina con más producción y última fecha de cualquier registro
-    op_maquina_real: dict[int, int] = {}          # op_docto -> maquina_id
-    op_maquina_max_prod: dict[int, int] = {}      # op_docto -> max total_prod visto
     op_ultima_fecha: dict[int, date] = {}          # op_docto -> última fecha registro
-
-    for num_op, maq_id, total_prod, ultima_f in prod_rows:
-        tp = int(total_prod or 0)
-        if num_op not in op_maquina_max_prod or tp > op_maquina_max_prod[num_op]:
-            op_maquina_max_prod[num_op] = tp
-            op_maquina_real[num_op] = maq_id
+    for num_op, ultima_f in prod_rows:
         if ultima_f is not None:
-            d = ultima_f.date() if hasattr(ultima_f, 'date') else ultima_f
-            if num_op not in op_ultima_fecha or d > op_ultima_fecha[num_op]:
-                op_ultima_fecha[num_op] = d
+            op_ultima_fecha[num_op] = ultima_f.date() if hasattr(ultima_f, 'date') else ultima_f
 
-    # Fallback: asignaciones planeadas para OPs sin registros de producción
-    asigs = (
-        db.query(Asignacion)
-        .filter(Asignacion.op_docto.in_(doctos), Asignacion.suspendida == False)
-        .all()
-    )
-    asig_map: dict[int, Asignacion] = {}
-    for a in asigs:
-        if a.op_docto not in asig_map:
-            asig_map[a.op_docto] = a
-
-    # Cargar nombres de máquinas (reales + planeadas)
-    all_maq_ids = set(op_maquina_real.values()) | {a.maquina_id for a in asig_map.values()}
+    # ── Máquina por OP: ruta como base, la producción real prevalece ──
+    maq_por_op = resolver_maquina_por_op(db, ops)
+    all_maq_ids = set(maq_por_op.values())
     maquinas: dict[int, Maquina] = (
         {m.Id: m for m in db.query(Maquina).filter(Maquina.Id.in_(all_maq_ids)).all()}
         if all_maq_ids else {}
@@ -353,11 +291,8 @@ def get_ops_tasa_servicio(
         consumida = op.cant_consumida or 0
         pct = round(min(consumida / cant * 100, 100), 1) if cant else 0.0
 
-        # Máquina: real (más producción) > planeada (asignación)
-        maq_id = op_maquina_real.get(op.docto)
-        if not maq_id:
-            asig = asig_map.get(op.docto)
-            maq_id = asig.maquina_id if asig else None
+        # Máquina: ruta (base) con prevalencia de producción real
+        maq_id = maq_por_op.get(op.docto)
         maq = maquinas.get(maq_id) if maq_id else None
 
         # Estado y fecha de completación

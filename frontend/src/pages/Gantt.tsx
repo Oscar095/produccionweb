@@ -103,7 +103,7 @@ const fmtUnidades = (n: number): string => {
 
 const fmtFecha = (s?: string | null) => s ? format(new Date(s), 'dd MMM yyyy', { locale: es }) : '—'
 
-export default function GanttPage() {
+export default function GanttPage({ kiosk = false }: { kiosk?: boolean } = {}) {
   const [viewMode, setViewMode] = useState<ViewMode>('monthly')
   const [cursor, setCursor] = useState<Date>(() => startOfDay(new Date()))
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
@@ -133,10 +133,18 @@ export default function GanttPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['gantt', viewMode, desde, hasta],
     queryFn: () => getGanttData({ desde, hasta }),
+    refetchInterval: kiosk ? 60_000 : false,
   })
 
   const recursos: GanttRecurso[] = data?.recursos ?? []
   const tareas: GanttTarea[] = data?.tareas ?? []
+
+  // Ordenar las filas por nivel de ocupación (días de carga) de mayor a menor.
+  // Las tareas se emparejan por ruta_id, así que reordenar las filas es suficiente.
+  const recursosOrdenados = useMemo(
+    () => [...recursos].sort((a, b) => b.dias_estimados - a.dias_estimados),
+    [recursos],
+  )
 
   // Posición de la barra agregada dentro del rango actual.
   const posicionBarra = (inicio: string, fin: string) => {
@@ -187,7 +195,17 @@ export default function GanttPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Hero */}
+      {/* Encabezado compacto (solo modo TV): título sin banner, para ganar espacio */}
+      {kiosk && (
+        <div className="flex items-center gap-2.5 px-6 py-3 bg-slate-900 text-white">
+          <CalendarRange size={20} className="text-blue-300" />
+          <h1 className="text-xl font-bold">Gantt por Centro de Trabajo</h1>
+          <span className="ml-auto text-sm font-medium text-blue-200">{headerSubLabel}</span>
+        </div>
+      )}
+
+      {/* Hero (oculto en modo TV) */}
+      {!kiosk && (
       <div className="bg-gradient-to-br from-slate-800 via-blue-900 to-blue-800 px-6 pt-6 pb-10">
         <div className="max-w-full mx-auto">
           <div className="flex items-start justify-between flex-wrap gap-4 mb-4">
@@ -251,8 +269,9 @@ export default function GanttPage() {
           </div>
         </div>
       </div>
+      )}
 
-      <div className="px-6 -mt-5 pb-10 max-w-full mx-auto space-y-6">
+      <div className={`px-6 max-w-full mx-auto space-y-6 ${kiosk ? 'pt-4 pb-10' : '-mt-5 pb-10'}`}>
 
         {isLoading && <Loading label="Calculando carga..." />}
 
@@ -331,7 +350,7 @@ export default function GanttPage() {
                 </div>
 
                 {/* Filas por Centro de Trabajo */}
-                {recursos.map((rec, idx) => {
+                {recursosOrdenados.map((rec, idx) => {
                   const tarea = tareas.find(t => t.ruta_id === rec.id)
                   const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'
                   const expanded = expandedIds.has(rec.id)

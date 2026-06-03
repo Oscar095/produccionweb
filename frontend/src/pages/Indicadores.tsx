@@ -515,7 +515,7 @@ export default function Indicadores() {
             </div>
             {activeTab === 'tasa_servicio' && data.por_maquina.some(m => m.maquina_id === 0) && (
               <p className="text-xs text-slate-400 mt-3 italic">
-                * "Sin asignar": OPs del mes sin asignación a ninguna máquina. La suma por máquina puede superar el total mensual si una OP tiene asignaciones múltiples.
+                * "Sin asignar": OPs del mes cuya ruta no tiene máquina configurada. Cada OP cuenta para una sola máquina, así que la suma por máquina cuadra con el total mensual.
               </p>
             )}
           </div>
@@ -625,7 +625,7 @@ function OpsListado({ ops, isLoading, filtro, setFiltro }: OpsListadoProps) {
             <thead>
               <tr className="border-b border-slate-100">
                 <th className="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">OP</th>
-                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Marca / Referencia</th>
+                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Item / Marca</th>
                 <th className="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Máquina</th>
                 <th className="text-right py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Compromiso</th>
                 <th className="text-right py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Completada</th>
@@ -642,8 +642,8 @@ function OpsListado({ ops, isLoading, filtro, setFiltro }: OpsListadoProps) {
                 >
                   <td className="py-2.5 px-3 font-mono text-xs text-slate-600">{op.op_docto}</td>
                   <td className="py-2.5 px-3 text-slate-700">
-                    <div className="font-medium leading-tight">{op.marca ?? '—'}</div>
-                    {op.referencia && <div className="text-xs text-slate-400">{op.referencia}</div>}
+                    <div className="font-medium leading-tight">{op.item ?? '—'}</div>
+                    {op.marca && <div className="text-xs text-slate-400">{op.marca}</div>}
                   </td>
                   <td className="py-2.5 px-3 text-slate-600 text-xs">
                     {op.maquina_nombre ?? <span className="italic text-slate-400">Sin registros</span>}

@@ -537,7 +537,76 @@ def compute_tasa_servicio(
     return tasa, total, atrasadas
 
 
-# ── Tasa de Servicio por máquina (query agregada, sin N+1) ──
+# ── Resolución de máquina por OP (ruta como base, producción real prevalece) ──
+
+def _maquina_id_por_ruta(db: Session) -> dict[str, tuple[int, str]]:
+    """
+    nombre_ruta.strip() -> (maquina_id, maquina_nombre).
+    Una máquina representativa por ruta: se prefiere estado disponible y,
+    a igualdad, el de menor Id.
+    """
+    from models.planning import RutaSiesa
+    from models.maintenance import EstadoMaquina
+
+    rutas = {r.id: r.nombre_ruta for r in db.query(RutaSiesa).all()}
+    estados = {
+        e.Id: (e.estado_descripcion or "").strip().lower()
+        for e in db.query(EstadoMaquina).all()
+    }
+    maquinas = db.query(Maquina).filter(Maquina.rutas_siesa_id.isnot(None)).all()
+    # Orden: disponibles primero, luego menor Id → la "primera" por ruta es la elegida.
+    maquinas.sort(key=lambda m: (estados.get(m.estado, "") == "no disponible", m.Id))
+
+    out: dict[str, tuple[int, str]] = {}
+    for m in maquinas:
+        nombre_ruta = rutas.get(m.rutas_siesa_id)
+        if not nombre_ruta:
+            continue
+        key = nombre_ruta.strip()
+        if key and key not in out:
+            out[key] = (m.Id, m.nombre)
+    return out
+
+
+def resolver_maquina_por_op(db: Session, ops: list) -> dict[int, int]:
+    """
+    op_docto -> maquina_id.
+    Base: máquina de la ruta del OP
+    (OpNumero.ruta_op -> RutaSiesa.nombre_ruta -> Maquina.rutas_siesa_id).
+    La máquina con mayor producción real registrada prevalece sobre la base de ruta.
+    """
+    ruta_map = _maquina_id_por_ruta(db)
+
+    res: dict[int, int] = {}
+    for op in ops:
+        hit = ruta_map.get((op.ruta_op or "").strip())
+        if hit:
+            res[op.docto] = hit[0]
+
+    doctos = [op.docto for op in ops]
+    if doctos:
+        prod_rows = (
+            db.query(
+                RegistroProduccion.numero_op,
+                RegistroProduccion.maquina,
+                func.sum(RegistroProduccion.produccion).label("total_prod"),
+            )
+            .filter(RegistroProduccion.numero_op.in_(doctos))
+            .group_by(RegistroProduccion.numero_op, RegistroProduccion.maquina)
+            .all()
+        )
+        best: dict[int, tuple[int, int]] = {}   # op_docto -> (maquina_id, max_prod)
+        for num_op, maq_id, total_prod in prod_rows:
+            tp = int(total_prod or 0)
+            if num_op not in best or tp > best[num_op][1]:
+                best[num_op] = (maq_id, tp)
+        for num_op, (maq_id, _) in best.items():
+            res[num_op] = maq_id
+
+    return res
+
+
+# ── Tasa de Servicio por máquina (resuelta por ruta, sin N+1) ──
 
 def compute_tasa_servicio_por_maquina(
     db: Session,
@@ -545,72 +614,64 @@ def compute_tasa_servicio_por_maquina(
     fin: datetime,
 ) -> list[dict]:
     """
-    Devuelve lista [{maquina_id, total, atrasadas}] agrupada por máquina.
-    Atrasadas incluye incompletas vencidas + completadas tarde (planeacion.op_cierre).
-    Las OPs sin asignación se manejan por separado en el router.
+    Devuelve lista [{maquina_id, total, atrasadas}] agrupada por máquina,
+    resolviendo la máquina de cada OP por su ruta (la producción real prevalece).
+    Las OPs sin máquina resoluble se agrupan en maquina_id = 0 ("Sin asignar").
+    Cada OP cuenta para exactamente una máquina, así que la suma por máquina
+    cuadra con el total mensual.
+    Atrasadas = incompletas vencidas + completadas tarde (planeacion.op_cierre).
     """
-    from models.planning import Asignacion, OpCierre
-    from sqlalchemy import case
+    from models.planning import OpCierre
 
-    hoy = datetime.now()
+    hoy = datetime.now().date()
     inicio_d = inicio.date() if isinstance(inicio, datetime) else inicio
     fin_d = fin.date() if isinstance(fin, datetime) else fin
 
-    from models.maintenance import EstadoMaquina as _EstadoMaquina
-    rows = (
-        db.query(
-            Asignacion.maquina_id,
-            func.count(func.distinct(OpNumero.Id)).label("total"),
-            func.sum(
-                case(
-                    (
-                        (OpNumero.f851_fecha_terminacion < hoy.date()) &
-                        (OpNumero.cant_consumida < OpNumero.cantidad),
-                        1,
-                    ),
-                    else_=0,
-                )
-            ).label("atrasadas"),
-        )
-        .join(OpNumero, OpNumero.docto == Asignacion.op_docto)
-        .join(Maquina, Maquina.Id == Asignacion.maquina_id)
-        .join(_EstadoMaquina, _EstadoMaquina.Id == Maquina.estado)
+    ops = (
+        db.query(OpNumero)
         .filter(
-            Asignacion.suspendida == False,
+            OpNumero.tipo_inv.like('%1430K.ex%'),
             OpNumero.f851_fecha_terminacion >= inicio_d,
             OpNumero.f851_fecha_terminacion <= fin_d,
-            func.lower(cast(_EstadoMaquina.estado_descripcion, String(200))) != 'no disponible',
         )
-        .group_by(Asignacion.maquina_id)
         .all()
     )
+    if not ops:
+        return []
 
-    # Completadas tarde por máquina (desde planeacion.op_cierre)
-    tard_rows = (
-        db.query(
-            Asignacion.maquina_id,
-            func.count(func.distinct(OpCierre.op_docto)).label("tard"),
-        )
-        .join(OpCierre, OpCierre.op_docto == Asignacion.op_docto)
-        .filter(
-            Asignacion.suspendida == False,
+    maq_por_op = resolver_maquina_por_op(db, ops)
+
+    doctos = [op.docto for op in ops]
+    tarde_doctos = {
+        c.op_docto
+        for c in db.query(OpCierre).filter(
+            OpCierre.op_docto.in_(doctos),
             OpCierre.fecha_prometida >= inicio_d,
             OpCierre.fecha_prometida <= fin_d,
-            OpCierre.fue_tarde == True,
+            OpCierre.fue_tarde == True,  # noqa: E712
+        ).all()
+    }
+
+    agg: dict[int, dict] = {}   # maquina_id (0 = sin asignar) -> {total, atrasadas}
+    for op in ops:
+        mid = maq_por_op.get(op.docto, 0) or 0
+        bucket = agg.setdefault(mid, {"total": 0, "atrasadas": 0})
+        bucket["total"] += 1
+
+        fp = op.f851_fecha_terminacion
+        fecha_prom = fp.date() if hasattr(fp, "date") else fp
+        incompleta_vencida = (
+            fecha_prom is not None
+            and fecha_prom < hoy
+            and (op.cant_consumida or 0) < (op.cantidad or 0)
         )
-        .group_by(Asignacion.maquina_id)
-        .all()
-    )
-    tard_por_maquina = {mid: int(tard or 0) for mid, tard in tard_rows}
+        if incompleta_vencida or op.docto in tarde_doctos:
+            bucket["atrasadas"] += 1
 
     return [
-        {
-            "maquina_id": mid,
-            "total": int(total or 0),
-            "atrasadas": int(atrasadas or 0) + tard_por_maquina.get(mid, 0),
-        }
-        for mid, total, atrasadas in rows
-        if mid is not None and (total or 0) > 0
+        {"maquina_id": mid, "total": v["total"], "atrasadas": v["atrasadas"]}
+        for mid, v in agg.items()
+        if v["total"] > 0
     ]
 
 

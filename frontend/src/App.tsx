@@ -13,6 +13,7 @@ import Usuarios from './pages/Usuarios'
 import Configuracion from './pages/Configuracion'
 import Chat from './pages/Chat'
 import Indicadores from './pages/Indicadores'
+import KioskTV from './pages/KioskTV'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 60_000, retry: 1 } },
@@ -22,6 +23,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore(s => s.token)
   if (!token) return <Navigate to="/login" replace />
   return <Layout>{children}</Layout>
+}
+
+// Igual que ProtectedRoute pero sin Layout (sin sidebar): para el modo TV de planta.
+function KioskRoute({ children }: { children: React.ReactNode }) {
+  const token = useAuthStore(s => s.token)
+  if (!token) return <Navigate to="/login" replace />
+  return <>{children}</>
 }
 
 export default function App() {
@@ -40,6 +48,7 @@ export default function App() {
           <Route path="/configuracion"   element={<ProtectedRoute><Configuracion /></ProtectedRoute>} />
           <Route path="/chat"            element={<ProtectedRoute><Chat /></ProtectedRoute>} />
           <Route path="/indicadores"     element={<ProtectedRoute><Indicadores /></ProtectedRoute>} />
+          <Route path="/tv"              element={<KioskRoute><KioskTV /></KioskRoute>} />
           <Route path="*"            element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>
