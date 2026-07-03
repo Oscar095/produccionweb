@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import {
   BarChart3, Target, Gauge, Zap, ShieldCheck, TrendingUp, Layers, Table2,
-  Loader2, AlertCircle, CheckCircle2, Clock, PackageCheck, type LucideIcon,
+  Loader2, AlertCircle, CheckCircle2, Clock, PackageCheck, Activity, type LucideIcon,
 } from 'lucide-react'
 import {
   fetchIndicador, fetchOpsTasaServicio,
@@ -26,6 +26,13 @@ type TabDef = {
 }
 
 const TABS: TabDef[] = [
+  {
+    key: 'oee',
+    label: 'OEE',
+    Icon: Activity,
+    accent: 'text-indigo-600 bg-indigo-100',
+    description: 'Disponibilidad × Rendimiento × Calidad — eficiencia global del equipo',
+  },
   {
     key: 'tasa_servicio',
     label: 'Tasa de Servicio',
@@ -52,7 +59,7 @@ const TABS: TabDef[] = [
     label: 'Calidad',
     Icon: ShieldCheck,
     accent: 'text-cyan-600 bg-cyan-100',
-    description: 'Unidades buenas / (buenas + clase B + desecho)',
+    description: 'Buenas / (buenas + clase B + desecho). Desecho en Kg normalizado a und (1 und ≈ 8 gr)',
   },
   {
     key: 'capacidad',
@@ -88,6 +95,11 @@ type ColDef = {
 }
 
 function getColumns(kpi: KpiKey): ColDef[] {
+  if (kpi === 'oee') return [
+    { key: 'disp', label: 'Disponibilidad', render: m => m.disponibilidad_pct != null ? `${m.disponibilidad_pct.toFixed(1)}%` : '—', align: 'right' },
+    { key: 'rend', label: 'Rendimiento', render: m => m.rendimiento_pct != null ? `${m.rendimiento_pct.toFixed(1)}%` : '—', align: 'right' },
+    { key: 'cal', label: 'Calidad', render: m => m.calidad_pct != null ? `${m.calidad_pct.toFixed(1)}%` : '—', align: 'right' },
+  ]
   if (kpi === 'disponibilidad') return [
     { key: 'dias', label: 'Días', render: m => m.dias_trabajados ?? '—', align: 'right' },
     { key: 'hrs_disp', label: 'Hrs hábiles', render: m => m.horas_disponibles?.toFixed(1) ?? '—', align: 'right' },
@@ -101,10 +113,11 @@ function getColumns(kpi: KpiKey): ColDef[] {
     { key: 'prod_teo', label: 'Prod. teórica', render: m => m.produccion_teorica?.toFixed(0) ?? '—', align: 'right' },
   ]
   if (kpi === 'calidad') return [
-    { key: 'buena', label: 'Buena', render: m => m.produccion_buena?.toLocaleString() ?? '—', align: 'right' },
-    { key: 'claseb', label: 'Clase B', render: m => m.clase_b?.toLocaleString() ?? '—', align: 'right' },
-    { key: 'desecho', label: 'Desecho', render: m => m.desecho?.toLocaleString() ?? '—', align: 'right' },
-    { key: 'total', label: 'Total', render: m => m.produccion_total?.toLocaleString() ?? '—', align: 'right' },
+    { key: 'buena', label: 'Buena (und)', render: m => m.produccion_buena?.toLocaleString() ?? '—', align: 'right' },
+    { key: 'claseb', label: 'Clase B (und)', render: m => m.clase_b?.toLocaleString() ?? '—', align: 'right' },
+    { key: 'desecho_kg', label: 'Desecho (Kg)', render: m => m.desecho_kg?.toLocaleString(undefined, { maximumFractionDigits: 2 }) ?? '—', align: 'right' },
+    { key: 'desecho', label: 'Desecho (und)', render: m => m.desecho?.toLocaleString() ?? '—', align: 'right' },
+    { key: 'total', label: 'Total (und)', render: m => m.produccion_total?.toLocaleString() ?? '—', align: 'right' },
   ]
   // tasa_servicio
   return [
@@ -114,7 +127,7 @@ function getColumns(kpi: KpiKey): ColDef[] {
 }
 
 export default function Indicadores() {
-  const [activeTab, setActiveTab] = useState<TabKey>('tasa_servicio')
+  const [activeTab, setActiveTab] = useState<TabKey>('oee')
   const [mes, setMes] = useState<string>(currentMonthString())
   const [maquinaId, setMaquinaId] = useState<number | undefined>(undefined)
   const [rutaId, setRutaId] = useState<number | undefined>(undefined)
@@ -174,7 +187,7 @@ export default function Indicadores() {
               </div>
               <h1 className="text-3xl font-bold text-white">Indicadores de Planta</h1>
               <p className="text-blue-200 text-sm mt-1">
-                Tasa de Servicio, Disponibilidad, Eficiencia, Calidad y Capacidad — vista mensual, acumulada y por máquina
+                OEE, Tasa de Servicio, Disponibilidad, Eficiencia, Calidad y Capacidad — vista mensual, acumulada y por máquina
               </p>
             </div>
             {isKpiTab && (

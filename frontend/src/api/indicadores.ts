@@ -1,6 +1,6 @@
 import { api } from './client'
 
-export type KpiKey = 'tasa_servicio' | 'disponibilidad' | 'eficiencia' | 'calidad'
+export type KpiKey = 'tasa_servicio' | 'disponibilidad' | 'eficiencia' | 'calidad' | 'oee'
 
 export interface PeriodoIndicador {
   inicio: string
@@ -31,9 +31,14 @@ export interface MaquinaValor {
   produccion_buena?: number | null
   clase_b?: number | null
   desecho?: number | null
+  desecho_kg?: number | null
   produccion_total?: number | null
   total_ops?: number | null
   ops_atrasadas?: number | null
+  // oee (valor = OEE%; estos son los tres pilares que lo componen)
+  disponibilidad_pct?: number | null
+  rendimiento_pct?: number | null
+  calidad_pct?: number | null
 }
 
 export interface IndicadorData {

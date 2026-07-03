@@ -30,7 +30,7 @@ from services.indicadores_service import (
     compute_tasa_servicio, compute_tasa_servicio_por_maquina,
     resolver_maquina_por_op,
     sync_completaciones,
-    compute_disponibilidad, compute_eficiencia, compute_calidad,
+    compute_disponibilidad, compute_eficiencia, compute_calidad, compute_oee,
     iter_semanas_mes,
 )
 
@@ -42,6 +42,7 @@ _KPI_TO_META = {
     "disponibilidad": "disponibilidad",
     "eficiencia": "eficiencia",
     "calidad": "calidad",
+    "oee": "oee",
 }
 
 _MESES_LARGO = [
@@ -117,6 +118,9 @@ def _compute_one(
     if kpi_internal == "calidad":
         valor, _, _, _ = compute_calidad(db, inicio, fin, maquina_id)
         return valor
+    if kpi_internal == "oee":
+        valor, _, _, _, _ = compute_oee(db, inicio, fin, maquina_id)
+        return valor
     raise HTTPException(status_code=400, detail=f"KPI no soportado: {kpi_internal}")
 
 
@@ -172,6 +176,20 @@ def _compute_por_maquina(
                 clase_b=m.clase_b,
                 desecho=m.desecho,
                 produccion_total=m.produccion_total,
+            )
+            for m in lista
+        ]
+
+    if kpi_internal == "oee":
+        _, lista, _, _, _ = compute_oee(db, inicio, fin, None)
+        return [
+            MaquinaValorOut(
+                maquina_id=m.maquina_id,
+                maquina_nombre=m.maquina_nombre,
+                valor=m.oee_pct,
+                disponibilidad_pct=m.disponibilidad_pct,
+                rendimiento_pct=m.rendimiento_pct,
+                calidad_pct=m.calidad_pct,
             )
             for m in lista
         ]
@@ -346,7 +364,7 @@ def get_indicador(
 ):
     # Aceptar guion o guión bajo
     kpi_norm = kpi.replace("-", "_").lower()
-    if kpi_norm not in {"tasa_servicio", "disponibilidad", "eficiencia", "calidad"}:
+    if kpi_norm not in {"tasa_servicio", "disponibilidad", "eficiencia", "calidad", "oee"}:
         raise HTTPException(status_code=404, detail=f"KPI '{kpi}' no encontrado")
 
     year, month = _parse_mes(mes)

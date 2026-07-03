@@ -1,17 +1,21 @@
 """
-Cálculos centralizados de los 4 indicadores de planta:
-Tasa de Servicio, Disponibilidad, Eficiencia, Calidad.
+Cálculos centralizados de los indicadores de planta:
+Tasa de Servicio, Disponibilidad, Eficiencia, Calidad y OEE (compuesto = D×R×Q).
 
 Cada función recibe (db, inicio, fin, maquina_id=None) y devuelve el valor
 global del período además del desglose por máquina.
 
-Regla horaria de planta (eficiencia y disponibilidad):
-  L-V  → 24 h/día
-  Sáb  → HORAS_SABADO (8 h) por día
-  Dom  → HORAS_DOMINGO_SI_TRABAJA (8 h) SOLO si la máquina registró producción
+Regla horaria de planta — Eficiencia y Disponibilidad comparten la MISMA base
+por máquina (vía _actividad_por_maquina): SOLO los días que la máquina trabajó
+según dbo.registro_produccion. Horas operativas de cada día trabajado:
+  Lun     → HORAS_LUNES (18 h, producción arranca 06:00)
+  Mar-Vie → 24 h/día
+  Sáb     → HORAS_SABADO (8 h)
+  Dom     → HORAS_DOMINGO_SI_TRABAJA (8 h) SOLO si la máquina registró producción
 
-working_hours.operative_hours_between sigue en uso para paradas de mantenimiento
-y para los cálculos de Gantt/planeación (L-V 24h). No se modifica.
+Las paradas de mantenimiento de Disponibilidad se acotan a esos días trabajados
+(_horas_parada_en_dias). working_hours.operative_hours_between sigue en uso para
+los cálculos de Gantt/planeación (L-V 24h). No se modifica.
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ from models.production import OpNumero, RegistroProduccion, Maquina
 from models.maintenance import SolicitudMantenimiento
 from schemas.production import (
     MaquinaAvailabilityOut, MaquinaEficienciaOut, MaquinaCalidadOut,
+    MaquinaOEEOut,
 )
 from services.working_hours import operative_hours_between
 
@@ -35,6 +40,11 @@ HORA_INICIO_LUNES: int = 6        # producción arranca a las 06:00 los lunes
 HORAS_LUNES: float = 24.0 - HORA_INICIO_LUNES   # = 18h
 HORAS_SABADO: float = 8.0
 HORAS_DOMINGO_SI_TRABAJA: float = 8.0
+
+# Estados de dbo.solicitudes_mantenimiento (dbo.estados_solicitudes_mantenimiento)
+ESTADO_EN_PROCESO: int = 1
+ESTADO_SOLUCIONADO: int = 2
+ESTADO_CANCELADO: int = 3
 
 
 def _horas_operativas_dia(d: date, tuvo_registros: bool) -> float:
@@ -51,21 +61,63 @@ def _horas_operativas_dia(d: date, tuvo_registros: bool) -> float:
 
 # ── helpers internos ────────────────────────────────────────
 
+def _horas_parada_en_dias(
+    fecha_ini: datetime, cierre: datetime, dias_validos: set[date]
+) -> float:
+    """
+    Horas L-V de [fecha_ini, cierre) que caen en días presentes en `dias_validos`.
+    Variante de operative_hours_between que además exige que la máquina haya
+    trabajado ese día (día con registro de producción), para no descontar paradas
+    de días que no entran en la base de disponibilidad.
+    """
+    if cierre <= fecha_ini:
+        return 0.0
+    total = 0.0
+    cursor = fecha_ini
+    while cursor < cierre:
+        end_of_day = (cursor + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        chunk_end = min(cierre, end_of_day)
+        d = cursor.date()
+        if d.weekday() <= 4 and d in dias_validos:   # L-V y la máquina trabajó ese día
+            total += (chunk_end - cursor).total_seconds() / 3600.0
+        cursor = chunk_end
+    return total
+
+
+def _fin_del_dia(dt: datetime) -> datetime:
+    """00:00 del día siguiente (fin exclusivo del día calendario de `dt`)."""
+    return (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 def _horas_parada_por_maquina(
     db: Session,
     inicio: datetime,
     fin: datetime,
     maquina_id: Optional[int] = None,
+    dias_validos: Optional[dict[int, set[date]]] = None,
 ) -> dict[int, float]:
     """
     Horas hábiles (L-V) de parada por máquina dentro de [inicio, fin]. Cuenta
-    sólo tickets cuyo inicio cae en el período (se descartan los arrastrados);
-    tickets aún abiertos se cuentan hasta `fin`.
+    sólo tickets cuyo inicio cae en el período (regla D; se descartan los arrastrados).
+
+    Cierre por ticket (evita que datos incompletos de AppSheet inflen la parada):
+      - Cancelado (estado 3): se descarta — no es una parada real.
+      - fecha_solucion presente: se usa (acotada a `fin`).
+      - Sin fecha_solucion + En proceso (estado 1): sigue abierto → se cuenta hasta `fin`.
+      - Sin fecha_solucion + cerrado sin fecha (Solucionado u otro): se cierra al FIN
+        DEL DÍA de inicio, no se estira hasta fin de mes.
+
+    Si se pasa `dias_validos` (fechas trabajadas por máquina), las paradas se
+    acotan a esos días — así numerador y denominador de disponibilidad comparten
+    la misma base de días.
     """
     q = db.query(
         SolicitudMantenimiento.row_maquina,
         SolicitudMantenimiento.fecha,
         SolicitudMantenimiento.fecha_solucion,
+        SolicitudMantenimiento.row_estado,
     ).filter(
         SolicitudMantenimiento.fecha >= inicio,
         SolicitudMantenimiento.fecha <= fin,
@@ -74,13 +126,26 @@ def _horas_parada_por_maquina(
         q = q.filter(SolicitudMantenimiento.row_maquina == maquina_id)
 
     out: dict[int, float] = {}
-    for row_maquina, fecha_ini, fecha_fin in q.all():
+    for row_maquina, fecha_ini, fecha_fin, row_estado in q.all():
         if row_maquina is None or fecha_ini is None:
             continue
-        cierre = min(fecha_fin or fin, fin)
+        if row_estado == ESTADO_CANCELADO:
+            continue
+        if fecha_fin is not None:
+            cierre = min(fecha_fin, fin)
+        elif row_estado == ESTADO_EN_PROCESO:
+            cierre = fin                                    # genuinamente abierto
+        else:
+            cierre = min(_fin_del_dia(fecha_ini), fin)      # cerrado sin fecha → fin del día
         if cierre <= fecha_ini:
             continue
-        out[row_maquina] = out.get(row_maquina, 0.0) + operative_hours_between(fecha_ini, cierre)
+        if dias_validos is not None:
+            horas = _horas_parada_en_dias(
+                fecha_ini, cierre, dias_validos.get(row_maquina, set())
+            )
+        else:
+            horas = operative_hours_between(fecha_ini, cierre)
+        out[row_maquina] = out.get(row_maquina, 0.0) + horas
     return out
 
 
@@ -89,11 +154,14 @@ def _actividad_por_maquina(
     inicio: datetime,
     fin: datetime,
     maquina_id: Optional[int] = None,
-) -> dict[int, tuple[int, float]]:
+) -> dict[int, tuple[int, float, set[date]]]:
     """
-    Por cada máquina con registros en el período devuelve (días, horas_operativas).
+    Por cada máquina con registros en el período devuelve
+    (días, horas_operativas, fechas_trabajadas).
     Días: conteo de días-calendario distintos con producción (incluye S/D si trabajó).
     Horas: suma aplicando _horas_operativas_dia — L-V 24h, Sáb 8h, Dom 8h si trabajó.
+    Fechas: conjunto de días-calendario con producción (base común para Eficiencia y
+    Disponibilidad, y para acotar las paradas a los días que la máquina trabajó).
     """
     q = db.query(
         RegistroProduccion.maquina,
@@ -105,42 +173,16 @@ def _actividad_por_maquina(
     if maquina_id is not None:
         q = q.filter(RegistroProduccion.maquina == maquina_id)
 
-    dias: dict[int, int] = {}
     horas: dict[int, float] = {}
+    fechas: dict[int, set[date]] = {}
     for mid, fecha_dia in q.distinct().all():
         if mid is None or fecha_dia is None:
             continue
         d = fecha_dia if isinstance(fecha_dia, date) else fecha_dia.date()
-        dias[mid] = dias.get(mid, 0) + 1
+        fechas.setdefault(mid, set()).add(d)
         horas[mid] = horas.get(mid, 0.0) + _horas_operativas_dia(d, True)
 
-    return {mid: (dias[mid], horas[mid]) for mid in dias}
-
-
-def _domingos_trabajados_por_maquina(
-    db: Session,
-    inicio: datetime,
-    fin: datetime,
-    maquina_id: Optional[int] = None,
-) -> dict[int, int]:
-    """Cuenta domingos distintos con registros de producción por máquina."""
-    q = db.query(
-        RegistroProduccion.maquina,
-        cast(RegistroProduccion.fecha, SADate).label("fecha_dia"),
-    ).filter(
-        RegistroProduccion.fecha >= inicio,
-        RegistroProduccion.fecha <= fin,
-    )
-    if maquina_id is not None:
-        q = q.filter(RegistroProduccion.maquina == maquina_id)
-    out: dict[int, int] = {}
-    for mid, fecha_dia in q.distinct().all():
-        if mid is None or fecha_dia is None:
-            continue
-        d = fecha_dia if isinstance(fecha_dia, date) else fecha_dia.date()
-        if d.weekday() == 6:
-            out[mid] = out.get(mid, 0) + 1
-    return out
+    return {mid: (len(fechas[mid]), horas[mid], fechas[mid]) for mid in fechas}
 
 
 def _nombres_maquinas(db: Session, ids: list[int]) -> dict[int, str]:
@@ -194,38 +236,6 @@ def _maquinas_universo(
     )
 
 
-def _horas_planta_periodo(inicio: datetime, fin: datetime) -> float:
-    """
-    Horas hábiles oficiales de planta en [inicio, fin]:
-    L-V → 24h, Sábado → HORAS_SABADO (proporcional si el rango recorta el día).
-    Domingos no se cuentan aquí — se agregan per-máquina en compute_disponibilidad.
-    """
-    if fin <= inicio:
-        return 0.0
-    total = 0.0
-    cursor = inicio
-    while cursor < fin:
-        wd = cursor.weekday()
-        end_of_day = (cursor + timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        chunk_end = min(fin, end_of_day)
-        if wd == 0:  # Lunes: producción arranca a las HORA_INICIO_LUNES
-            lunes_6am = cursor.replace(
-                hour=HORA_INICIO_LUNES, minute=0, second=0, microsecond=0
-            )
-            effective_start = max(cursor, lunes_6am)
-            total += max(0.0, (chunk_end - effective_start).total_seconds() / 3600.0)
-        elif wd <= 4:  # Mar-Vie: 24h completas
-            total += (chunk_end - cursor).total_seconds() / 3600.0
-        elif wd == 5:  # Sábado: 8h (proporcional si el rango lo recorta)
-            chunk_h = (chunk_end - cursor).total_seconds() / 3600.0
-            total += HORAS_SABADO * (chunk_h / 24.0)
-        # Domingo: 0 (se suma per-máquina en compute_disponibilidad)
-        cursor = chunk_end
-    return total
-
-
 # ── Disponibilidad ──────────────────────────────────────────
 
 def compute_disponibilidad(
@@ -235,17 +245,23 @@ def compute_disponibilidad(
     maquina_id: Optional[int] = None,
 ) -> Tuple[float, List[MaquinaAvailabilityOut], float, float]:
     """
-    Disponibilidad = (horas_planta − horas_parada) / horas_planta.
-    horas_planta por máquina = _horas_planta_periodo (L-V 24h + Sáb 8h)
-                               + domingos trabajados × HORAS_DOMINGO_SI_TRABAJA.
+    Disponibilidad = (horas_operativas − horas_parada) / horas_operativas, por máquina.
+
+    Base = SOLO los días que la máquina trabajó según el reporte de producción
+    (la MISMA base que Eficiencia, vía _actividad_por_maquina): L-V 18/24h, Sáb 8h,
+    Dom 8h si trabajó. Las paradas de mantenimiento se acotan a esos mismos días, de
+    modo que numerador y denominador comparten la base de días.
+
+    Una máquina sin producción en el período no tiene base y se omite (queda alineada
+    con el universo de Eficiencia/Calidad). Limitación: un paro en un día con 0
+    producción no se refleja aquí — para esos outages de día completo el instrumento
+    es el Pareto de paradas, no este KPI.
+
     Devuelve (valor_global_pct, por_maquina, horas_disp_total, horas_parada_total).
     """
-    horas_planta = _horas_planta_periodo(inicio, fin)
-    if horas_planta <= 0:
-        return 0.0, [], 0.0, 0.0
-
-    paradas = _horas_parada_por_maquina(db, inicio, fin, maquina_id)
-    domingos = _domingos_trabajados_por_maquina(db, inicio, fin, maquina_id)
+    actividad = _actividad_por_maquina(db, inicio, fin, maquina_id)
+    dias_validos = {mid: info[2] for mid, info in actividad.items()}
+    paradas = _horas_parada_por_maquina(db, inicio, fin, maquina_id, dias_validos)
     maquinas = _maquinas_universo(db, inicio, fin, maquina_id)
 
     por_maquina: list[MaquinaAvailabilityOut] = []
@@ -253,18 +269,23 @@ def compute_disponibilidad(
     horas_parada_total = 0.0
 
     for m in maquinas:
-        horas_disp_m = horas_planta + domingos.get(m.Id, 0) * HORAS_DOMINGO_SI_TRABAJA
-        horas_parada = min(paradas.get(m.Id, 0.0), horas_disp_m)
-        disp_pct = round(max(0.0, (horas_disp_m - horas_parada) / horas_disp_m) * 100, 1)
+        info = actividad.get(m.Id)
+        if not info:
+            continue
+        dias_m, horas_op, _ = info
+        if horas_op <= 0:
+            continue
+        horas_parada = min(paradas.get(m.Id, 0.0), horas_op)
+        disp_pct = round(max(0.0, (horas_op - horas_parada) / horas_op) * 100, 1)
         por_maquina.append(MaquinaAvailabilityOut(
             maquina_id=m.Id,
             maquina_nombre=m.nombre,
-            dias_trabajados=round(horas_disp_m / 24.0),
-            horas_disponibles=round(horas_disp_m, 1),
+            dias_trabajados=dias_m,
+            horas_disponibles=round(horas_op, 1),
             horas_parada=round(horas_parada, 1),
             disponibilidad_pct=disp_pct,
         ))
-        horas_disp_total += horas_disp_m
+        horas_disp_total += horas_op
         horas_parada_total += horas_parada
 
     por_maquina.sort(key=lambda x: x.disponibilidad_pct)
@@ -321,7 +342,7 @@ def compute_eficiencia(
         info = actividad.get(m.Id)
         if not info:
             continue
-        dias_m, horas_operativas = info
+        dias_m, horas_operativas, _ = info
         if horas_operativas <= 0:
             continue
         prod_teorica = cap * horas_operativas
@@ -350,6 +371,11 @@ def compute_eficiencia(
 
 # ── Calidad ─────────────────────────────────────────────────
 
+# Peso promedio de una unidad de desecho, para normalizar Kg → unidades.
+# 1 unidad ≈ 8 gr  →  1 Kg = 1000 gr = 125 unidades.
+GRAMOS_POR_UNIDAD_DESECHO = 8.0
+
+
 def compute_calidad(
     db: Session,
     inicio: datetime,
@@ -358,6 +384,11 @@ def compute_calidad(
 ) -> Tuple[float, List[MaquinaCalidadOut], int, int]:
     """
     Calidad = SUM(produccion) / SUM(produccion + clase_b + desecho).
+
+    Normalización de unidades: `produccion` (buena) y `clase_b` están en
+    unidades, pero `desecho` está en Kg. Se convierte el desecho a unidades
+    asumiendo un peso promedio de 8 gr por unidad (1 Kg = 125 und) antes de
+    sumarlo, para que el total quede en una sola unidad de medida.
     """
     q = db.query(
         RegistroProduccion.maquina,
@@ -398,8 +429,10 @@ def compute_calidad(
             continue
         buena = int(buena or 0)
         clase_b = int(clase_b or 0)
-        desecho = int(desecho or 0)
-        total = buena + clase_b + desecho
+        # desecho llega en Kg → normalizar a unidades (1 und ≈ 8 gr)
+        desecho_kg = float(desecho or 0)
+        desecho_und = round(desecho_kg * 1000.0 / GRAMOS_POR_UNIDAD_DESECHO)
+        total = buena + clase_b + desecho_und
         if total <= 0:
             continue
         calidad_pct = round(buena / total * 100, 1)
@@ -408,7 +441,8 @@ def compute_calidad(
             maquina_nombre=nombres.get(mid),
             produccion_buena=buena,
             clase_b=clase_b,
-            desecho=desecho,
+            desecho=desecho_und,
+            desecho_kg=round(desecho_kg, 2),
             produccion_total=total,
             calidad_pct=calidad_pct,
         ))
@@ -421,6 +455,56 @@ def compute_calidad(
         if produccion_total > 0 else 0.0
     )
     return valor_global, por_maquina, buena_total, produccion_total
+
+
+# ── OEE (Disponibilidad × Rendimiento × Calidad) ────────────
+
+def compute_oee(
+    db: Session,
+    inicio: datetime,
+    fin: datetime,
+    maquina_id: Optional[int] = None,
+) -> Tuple[float, List[MaquinaOEEOut], float, float, float]:
+    """
+    OEE = Disponibilidad × Rendimiento (Eficiencia) × Calidad.
+
+    - Global del período = producto de los tres globales de planta. Es idéntico al
+      que expone /api/production/equipment-oee (Dashboard), para no tener dos números
+      de OEE distintos en el sistema.
+    - Por máquina = producto de los tres pilares, SOLO para máquinas presentes en los
+      tres (intersección). Una máquina sin base en cualquiera de los pilares
+      (sin producción, sin capacidad, "No Disponible") se omite del OEE por máquina.
+
+    Devuelve (oee_global_pct, por_maquina, disp_global, rend_global, cal_global).
+    """
+    d_glob, d_list, _, _ = compute_disponibilidad(db, inicio, fin, maquina_id)
+    r_glob, r_list, _, _ = compute_eficiencia(db, inicio, fin, maquina_id)
+    q_glob, q_list, _, _ = compute_calidad(db, inicio, fin, maquina_id)
+
+    valor_global = round((d_glob / 100.0) * (r_glob / 100.0) * (q_glob / 100.0) * 100, 1)
+
+    d_map = {m.maquina_id: m for m in d_list}
+    r_map = {m.maquina_id: m for m in r_list}
+    q_map = {m.maquina_id: m for m in q_list}
+    comunes = set(d_map) & set(r_map) & set(q_map)
+
+    por_maquina: list[MaquinaOEEOut] = []
+    for mid in comunes:
+        d = d_map[mid].disponibilidad_pct
+        r = r_map[mid].eficiencia_pct
+        q = q_map[mid].calidad_pct
+        oee_pct = round((d / 100.0) * (r / 100.0) * (q / 100.0) * 100, 1)
+        por_maquina.append(MaquinaOEEOut(
+            maquina_id=mid,
+            maquina_nombre=d_map[mid].maquina_nombre,
+            disponibilidad_pct=d,
+            rendimiento_pct=r,
+            calidad_pct=q,
+            oee_pct=oee_pct,
+        ))
+
+    por_maquina.sort(key=lambda x: x.oee_pct)
+    return valor_global, por_maquina, d_glob, r_glob, q_glob
 
 
 # ── Tasa de Servicio ────────────────────────────────────────

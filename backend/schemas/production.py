@@ -118,8 +118,9 @@ class MaquinaCalidadOut(BaseModel):
     maquina_nombre: Optional[str] = None
     produccion_buena: int          # produccion
     clase_b: int
-    desecho: int
-    produccion_total: int          # produccion + clase_b + desecho
+    desecho: int                   # desecho normalizado a unidades (desde Kg)
+    desecho_kg: float = 0.0        # desecho original en Kg
+    produccion_total: int          # produccion + clase_b + desecho (todo en und)
     calidad_pct: float
 
 

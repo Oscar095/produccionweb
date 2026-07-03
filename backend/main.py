@@ -89,6 +89,7 @@ def startup():
             ("disponibilidad", "Disponibilidad Equipos",  90.0),
             ("eficiencia",     "Eficiencia Equipos",      80.0),
             ("calidad",        "Calidad Equipos",         95.0),
+            ("oee",            "OEE Equipos",             68.0),
         ]
         with SessionLocal() as session:
             for kpi, label, valor in _METAS_DEFAULT:

@@ -41,6 +41,10 @@ class MaquinaValorOut(BaseModel):
     # tasa_servicio
     total_ops: Optional[int] = None
     ops_atrasadas: Optional[int] = None
+    # oee (componentes: valor lleva el OEE%)
+    disponibilidad_pct: Optional[float] = None
+    rendimiento_pct: Optional[float] = None
+    calidad_pct: Optional[float] = None
 
 
 class OpTasaServicioOut(BaseModel):

@@ -161,11 +161,11 @@ def get_kpis(db: Session = Depends(get_db), _=Depends(get_current_user)):
 @router.get("/equipment-availability", response_model=EquipmentAvailabilityOut)
 def get_equipment_availability(db: Session = Depends(get_db), _=Depends(get_current_user)):
     """
-    Disponibilidad por máquina = (horas_hábiles − horas_parada) / horas_hábiles
-    Período: mes en curso (día 1 → hoy). Las horas hábiles son las horas L-V
-    transcurridas del mes (planta opera 24h L-V, sábado y domingo se excluyen).
-    Esto da la MISMA base horaria a todas las máquinas; la diferencia entre
-    máquinas viene solo de los tickets de mantenimiento.
+    Disponibilidad por máquina = (horas_operativas − horas_parada) / horas_operativas
+    Período: mes en curso (día 1 → hoy). La base son SOLO los días que cada máquina
+    trabajó según el reporte de producción (la misma base que Eficiencia): L-V 18/24h,
+    Sáb 8h, Dom 8h si trabajó. Las paradas de mantenimiento se acotan a esos días.
+    Cada máquina tiene su propia base de días — ya no es la misma para todas.
     """
     from services.indicadores_service import compute_disponibilidad
 
@@ -192,12 +192,12 @@ def get_equipment_efficiency(db: Session = Depends(get_db), _=Depends(get_curren
 
         producción real     = SUM(produccion + clase_b + desecho)  (throughput total)
         producción teórica  = capacidad_hora × horas_operativas
-        horas_operativas    = horas_hábiles_mes − horas_parada_mantenimiento
+        horas_operativas    = horas de los días que la máquina trabajó
+                              (L-V 18/24h, Sáb 8h, Dom 8h si trabajó)
 
-    horas_hábiles_mes son las horas L-V transcurridas del mes (planta opera
-    24h L-V). Se aplica la MISMA base horaria a todas las máquinas, por lo
-    que la diferencia entre máquinas solo proviene de su throughput real y
-    sus paradas registradas.
+    La base son SOLO los días con registro de producción de cada máquina, así que
+    cada máquina tiene su propia base. Las paradas NO se descuentan aquí (ya afectan
+    a Disponibilidad dentro del OEE). Máquinas con calcula_capacidad=False se excluyen.
     """
     from services.indicadores_service import compute_eficiencia
 
